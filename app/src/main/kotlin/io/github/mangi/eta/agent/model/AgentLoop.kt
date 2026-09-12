@@ -2,6 +2,8 @@ package io.github.mangi.eta.agent.model
 
 import io.github.mangi.eta.agent.runtime.AgentEvent
 import io.github.mangi.eta.agent.runtime.AgentRunController
+import io.github.mangi.eta.agent.runtime.AgentTokenUsage
+import io.github.mangi.eta.agent.roleplay.RoleplayRunContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -23,6 +25,15 @@ internal class AgentLoop(
     private val onEvent: (AgentEvent) -> Unit,
     private val toolsForRound: (() -> JSONArray)? = null,
     private val modelRetry: AgentModelRetry = AgentModelRetry(),
+    private val sessionId: String = java.util.UUID.randomUUID().toString(),
+    private val transcript: JSONArray = JSONArray(),
+    private val systemCount: Int = 0,
+    private val operationId: String = sessionId,
+    private val onContextSnapshot: (AgentContextSnapshot) -> Unit = {},
+    private val onTranscript: (List<AgentModelClient.ConversationMessage>) -> Unit = {},
+    private val purpose: ProviderRequestPurpose = ProviderRequestPurpose.CHAT,
+    private val roleplayContext: RoleplayRunContext? = null,
+    initialSupplementIndex: Int = 0,
 ) {
     data class Result(
         val content: String,
@@ -39,6 +50,32 @@ internal class AgentLoop(
     private val accumulatedReasoning = StringBuilder()
     private val sensitiveToolCallIds = linkedSetOf<String>()
     private var pendingToolImageMessage: JSONObject? = null
+    private val context = AgentContextSession(
+        config, messages, systemCount, operationId, provider, runController,
+        { sensitiveToolCallIds }, onEvent, onContextSnapshot, { transcript.length() },
+        roleplay = roleplayContext != null,
+    )
+    private var supplementIndex = initialSupplementIndex
+
+    fun contextSnapshot(): AgentContextSnapshot? = context.snapshot()
+
+    private fun appendMessage(message: JSONObject) {
+        messages.put(message)
+        transcript.put(message)
+    }
+
+    private var publishedTranscriptSize = 0
+
+    private fun publishTranscript() {
+        if (publishedTranscriptSize == transcript.length()) return
+        onTranscript(AgentConversationCodec.transcript(transcript, 0, sensitiveToolCallIds))
+        publishedTranscriptSize = transcript.length()
+    }
+
+    fun compactOnly(): Result {
+        context.compact(tools, force = true)
+        return Result("", "", emptySet())
+    }
 
     fun reasoningSnapshot(): String = accumulatedReasoning.toString().trim()
 
@@ -49,38 +86,79 @@ internal class AgentLoop(
 
         while (true) {
             runController.throwIfCancelled()
-            appendPendingSteeringMessage()
+            if (purpose.allowsTools) appendPendingSteeringMessage()
 
-            val roundTools = toolsForRound?.invoke() ?: tools
+            val roundTools = if (purpose.allowsTools) toolsForRound?.invoke() ?: tools else JSONArray()
             toolCallValidator = AgentToolCallValidator(roundTools)
+            publishTranscript()
+            context.compact(roundTools)
+            var requestMessages = roleplayContext?.projectMessages(messages, roundTools) ?: messages
+            var requestEstimate = AgentContextBudget.rawEstimate(requestMessages, roundTools)
+            var roundInputTokens: Int? = null
+            var overflowAttempts = 0
             val reasoningLengthBeforeRound = accumulatedReasoning.length
+            var completedResponse: AgentModelRetry.Result? = null
             val completedRound = try {
-                modelRetry.complete(
-                    initialRound = round,
-                    request = ProviderRequest(config, messages, roundTools),
-                    provider = provider,
-                    controller = runController,
-                    onEvent = onEvent,
-                    onProviderEvent = { attemptRound, providerEvent ->
-                        if (providerEvent is ProviderEvent.BlockDelta &&
-                            providerEvent.kind == AssistantBlockKind.THINKING
-                        ) {
-                            accumulatedReasoning.append(providerEvent.delta)
-                        }
-                        providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
-                    },
-                    discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
-                )
+                while (true) {
+                    try {
+                        val response = modelRetry.complete(
+                            initialRound = round,
+                            request = ProviderRequest(config, requestMessages, roundTools, sessionId, purpose),
+                            provider = provider,
+                            controller = runController,
+                            onEvent = onEvent,
+                            onProviderEvent = { attemptRound, providerEvent ->
+                                if (!purpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
+                                        providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
+                                    throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+                                }
+                                if (providerEvent is ProviderEvent.Usage) {
+                                roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
+                            }
+                                if (providerEvent is ProviderEvent.BlockDelta &&
+                                    providerEvent.kind == AssistantBlockKind.THINKING
+                                ) {
+                                    accumulatedReasoning.append(providerEvent.delta)
+                                }
+                                providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
+                            },
+                            discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
+                        )
+                        completedResponse = response
+                        break
+                    } catch (failure: AgentModelFailure) {
+                        if (failure.code != "CONTEXT_OVERFLOW" || !failure.recoveryAllowed ||
+                            overflowAttempts >= AgentContextBudget.MAX_OVERFLOW_ATTEMPTS) throw failure
+                        overflowAttempts++
+                        accumulatedReasoning.setLength(reasoningLengthBeforeRound)
+                        context.compact(roundTools, force = true)
+                        requestMessages = roleplayContext?.projectMessages(messages, roundTools) ?: messages
+                        requestEstimate = AgentContextBudget.rawEstimate(requestMessages, roundTools)
+                        roundInputTokens = null
+                        round++
+                    }
+                }
+                checkNotNull(completedResponse)
             } finally {
                 // 同一回合的重试仍需原始观察；整个回合结束后才移除截图。
                 discardPendingToolImageMessage()
             }
+            context.budget.observe(
+                roundInputTokens?.let { AgentTokenUsage(inputTokens = it) },
+                requestEstimate,
+            )
             round = completedRound.round
             val providerResponse = completedRound.response
 
             runController.throwIfCancelled()
             val assistantMessage = providerResponse.assistantMessage
             val toolCalls = AgentConversationCodec.parseToolCalls(assistantMessage)
+            if (!purpose.allowsTools && toolCalls.isNotEmpty()) {
+                throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+            }
+            if (purpose == ProviderRequestPurpose.REPLY_REWRITE && providerResponse.stopReason != AssistantStopReason.END_TURN) {
+                throw AgentModelFailure("REPLY_REWRITE_INCOMPLETE", false, "模型未返回完整的改写回复；原回复未改变。")
+            }
             val assistantReasoning = assistantMessage.optString("reasoning_content")
             if (
                 assistantReasoning.isNotBlank() &&
@@ -89,11 +167,11 @@ internal class AgentLoop(
                 accumulatedReasoning.append(assistantReasoning)
             }
 
-            messages.put(
+            appendMessage(
                 AgentConversationCodec.assistantHistoryMessage(
                     source = assistantMessage,
                     toolCalls = toolCalls,
-                )
+                ).put("_eta_message_id", "assistant-$operationId-$round")
             )
             onEvent(
                 AgentEvent.AssistantReceived(
@@ -105,36 +183,32 @@ internal class AgentLoop(
             )
 
             if (toolCalls.isNotEmpty()) {
-                val outcomes = when (providerResponse.stopReason) {
-                    AssistantStopReason.TOOL_USE ->
-                        toolCalls.map { call -> executeTool(round, call) }
-                    AssistantStopReason.OUTPUT_LIMIT ->
-                        toolCalls.map { call ->
-                            rejectedToolOutcome(
-                                round = round,
-                                toolCall = call,
-                                code = "TRUNCATED_TOOL_CALL",
-                                message = "模型输出达到长度上限，工具参数可能不完整；本次调用未执行，请重新提交完整参数。",
-                            )
-                        }
-                    else ->
-                        toolCalls.map { call ->
-                            rejectedToolOutcome(
-                                round = round,
-                                toolCall = call,
-                                code = "UNEXPECTED_TOOL_CALL",
-                                message = "模型在 ${providerResponse.stopReason.name} 终止状态下返回了工具调用；" +
-                                    "本批调用未执行，请重新规划。",
-                            )
-                        }
+                val outcomes = toolCalls.map { call ->
+                    val outcome = when (providerResponse.stopReason) {
+                        AssistantStopReason.TOOL_USE -> executeTool(round, call)
+                        AssistantStopReason.OUTPUT_LIMIT -> rejectedToolOutcome(
+                            round, call, "TRUNCATED_TOOL_CALL",
+                            "模型输出达到长度上限，工具参数可能不完整；本次调用未执行，请重新提交完整参数。",
+                        )
+                        else -> rejectedToolOutcome(
+                            round, call, "UNEXPECTED_TOOL_CALL",
+                            "模型在 ${providerResponse.stopReason.name} 终止状态下返回了工具调用；本批调用未执行，请重新规划。",
+                        )
+                    }
+                    appendMessage(AgentConversationCodec.toolResultMessage(outcome.call, outcome.result))
+                    publishTranscript()
+                    outcome
                 }
-                appendToolOutcomes(round, outcomes)
+                appendToolImages(round, outcomes)
+                publishTranscript()
                 round += 1
                 continue
             }
 
+            publishTranscript()
+
             // assistant 已自然结束时再检查 steering。这样补充消息不会丢掉刚完成的回答。
-            if (appendPendingSteeringOrSeal()) {
+            if (purpose.allowsTools && appendPendingSteeringOrSeal()) {
                 round += 1
                 continue
             }
@@ -145,6 +219,8 @@ internal class AgentLoop(
                 error("模型接口第 $round 轮返回为空${finishReason.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}")
             }
 
+            publishTranscript()
+            if (purpose.allowsTools) context.compact(roundTools, final = true)
             onEvent(AgentEvent.RunFinished(round = round, contentChars = content.length))
             return Result(
                 content = content,
@@ -156,18 +232,24 @@ internal class AgentLoop(
 
     private fun appendPendingSteeringMessage(): Boolean {
         val supplement = runController.pollSteeringMessage() ?: return false
-        messages.put(AgentConversationCodec.userTextMessage(steeringPrompt(supplement)))
+        appendMessage(steeringMessage(supplement))
+        context.userAppended()
         return true
     }
 
     private fun appendPendingSteeringOrSeal(): Boolean {
         val supplement = runController.pollSteeringOrSeal() ?: return false
-        messages.put(AgentConversationCodec.userTextMessage(steeringPrompt(supplement)))
+        appendMessage(steeringMessage(supplement))
+        context.userAppended()
         return true
     }
 
     private fun steeringPrompt(supplement: String): String =
         "用户补充指令：$supplement\n\n请基于当前任务上下文继续执行，不要从头重复已经完成或已经验证过的操作。"
+
+    private fun steeringMessage(supplement: String): JSONObject =
+        AgentConversationCodec.userTextMessage(steeringPrompt(supplement))
+            .put("_eta_message_id", "user-$operationId-supplement-${++supplementIndex}")
 
     private fun executeTool(
         round: Int,
@@ -208,7 +290,6 @@ internal class AgentLoop(
             sensitiveToolCallIds += toolCall.id
         }
 
-        runController.throwIfCancelled()
         emitToolFinished(round, toolCall, result)
         return ToolOutcome(toolCall, result)
     }
@@ -259,19 +340,17 @@ internal class AgentLoop(
         )
     }
 
-    private fun appendToolOutcomes(
+    private fun appendToolImages(
         round: Int,
         outcomes: List<ToolOutcome>,
     ) {
-        // Provider 要求同一 assistant 批次的全部 tool result 连续出现；图片观察统一放在批次之后。
-        outcomes.forEach { outcome ->
-            messages.put(AgentConversationCodec.toolResultMessage(outcome.call, outcome.result))
+        // 每个已完成结果立即落盘；图片观察仍统一放在完整工具批次之后。
+        val imageOutcomes = outcomes.filter { outcome -> outcome.result.images.isNotEmpty() }
+        if (imageOutcomes.isEmpty()) {
+            return
         }
 
-        val imageOutcomes = outcomes.filter { outcome -> outcome.result.images.isNotEmpty() }
-        if (imageOutcomes.isEmpty()) return
-
-        // 工具截图是瞬时观察，不是会话资产。下一次推理消费后立即删除。
+        // 工具截图是瞬时观察，不是会话资产。下一次思考消费后立即删除。
         discardPendingToolImageMessage()
         val images = imageOutcomes.flatMap { outcome -> outcome.result.images }
         val toolNames = imageOutcomes
@@ -281,7 +360,7 @@ internal class AgentLoop(
         pendingToolImageMessage = AgentConversationCodec.userMessage(
             text = "Latest observation image(s) returned by tool(s): $toolNames.",
             images = images,
-        ).also(messages::put)
+        ).put("_eta_observation", true).also(messages::put)
 
         imageOutcomes.forEach { outcome ->
             onEvent(

@@ -1,10 +1,10 @@
 package io.github.mangi.eta.agent.model
 
 import io.github.mangi.eta.agent.runtime.AgentEvent
-import io.github.mangi.eta.agent.runtime.AgentRunCancelledException
 import io.github.mangi.eta.agent.runtime.AgentRunController
 import io.github.mangi.eta.agent.memory.AgentMemoryContext
 import io.github.mangi.eta.agent.skill.SkillContext
+import io.github.mangi.eta.agent.roleplay.RoleplayRunContext
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.agent.tool.AgentToolCapabilities
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
@@ -95,6 +95,15 @@ internal object AgentModelClient {
         memoryContext: AgentMemoryContext = AgentMemoryContext.DISABLED,
         additionalTools: JSONArray = JSONArray(),
         capabilitiesProvider: () -> AgentToolCapabilities = { AgentToolCapabilities(rootAvailable = false) },
+        sessionId: String = java.util.UUID.randomUUID().toString(),
+        compactOnly: Boolean = false,
+        operationId: String = sessionId,
+        initialUserMessageId: String = "user-$operationId",
+        initialSupplementIndex: Int = 0,
+        roleplayContext: RoleplayRunContext? = null,
+        rewriteReply: Boolean = false,
+        onContextSnapshot: (AgentContextSnapshot) -> Unit = {},
+        onTranscript: (List<ConversationMessage>) -> Unit = {},
         onEvent: (AgentEvent) -> Unit = {}
     ): ModelResponse.Text {
         config.validate()
@@ -107,9 +116,25 @@ internal object AgentModelClient {
             skillContext,
             memoryContext,
             rootAvailable = initialCapabilities.rootAvailable,
+            roleplayContext = roleplayContext,
         )
-        val transcriptStartIndex = messages.length()
+        if (rewriteReply) {
+            messages.put(messages.length() - 1, AgentConversationCodec.userTextMessage(
+                "请只改写下面这条角色回复，保持已有事实与实际工具结果，以当前角色设定改善表达。" +
+                    "这不是重新执行任务；不得调用任何工具、重读设备、更新记忆或编造缺失证据。只输出替代正文。\n" +
+                    "<reply_to_rewrite>\n$prompt\n</reply_to_rewrite>",
+            ))
+        } else if (!compactOnly) {
+            messages.getJSONObject(messages.length() - 1).put("_eta_message_id", initialUserMessageId)
+        }
+        if (compactOnly) messages.remove(messages.length() - 1)
+        val transcript = JSONArray()
+        // 旧 history 中的无效消息可能在组装时被跳过，系统边界不能由 history 条数倒推。
+        val systemCount = AgentPromptBuilder.buildSystemMessages(
+            config, skillContext, memoryContext, initialCapabilities.rootAvailable, roleplayContext,
+        ).length()
         fun toolsFor(capabilities: AgentToolCapabilities): JSONArray {
+            if (rewriteReply) return JSONArray()
             val tools = AgentToolCatalog.build(
                 terminalTools = config.terminalTools,
                 browserTools = config.browserTools,
@@ -119,6 +144,7 @@ internal object AgentModelClient {
                 skillGitHubDiscovery = true,
                 skillGitHubInstall = true,
                 memoryTools = memoryContext.enabled,
+                memoryWritable = roleplayContext == null,
                 capabilities = capabilities,
             )
             for (index in 0 until additionalTools.length()) {
@@ -137,6 +163,12 @@ internal object AgentModelClient {
         )
         var promptRootAvailable = initialCapabilities.rootAvailable
         val loop = AgentLoop(
+            transcript = transcript,
+            systemCount = systemCount,
+            operationId = operationId,
+            onContextSnapshot = if (rewriteReply) ({ _ -> }) else onContextSnapshot,
+            onTranscript = onTranscript,
+            sessionId = sessionId,
             config = config,
             messages = messages,
             tools = tools,
@@ -145,11 +177,14 @@ internal object AgentModelClient {
             runController = runController,
             traceFormatter = traceFormatter,
             onEvent = onEvent,
+            purpose = if (rewriteReply) ProviderRequestPurpose.REPLY_REWRITE else ProviderRequestPurpose.CHAT,
+            roleplayContext = roleplayContext,
+            initialSupplementIndex = initialSupplementIndex,
             toolsForRound = {
                 val capabilities = capabilitiesProvider()
                 if (capabilities.rootAvailable != promptRootAvailable) {
                     val systemMessages = AgentPromptBuilder.buildSystemMessages(
-                        config, skillContext, memoryContext, capabilities.rootAvailable,
+                        config, skillContext, memoryContext, capabilities.rootAvailable, roleplayContext,
                     )
                     for (index in 0 until systemMessages.length()) {
                         messages.put(index, systemMessages.getJSONObject(index))
@@ -160,26 +195,26 @@ internal object AgentModelClient {
             },
         )
         val result = try {
-            loop.run()
-        } catch (cancelled: AgentRunCancelledException) {
-            throw cancelled
+            if (compactOnly) loop.compactOnly() else loop.run()
         } catch (throwable: Throwable) {
             throw AgentModelExecutionException(
                 cause = throwable,
+                contextSnapshot = if (rewriteReply) null else loop.contextSnapshot(),
                 reasoningContent = loop.reasoningSnapshot(),
-                transcript = AgentConversationCodec.transcript(
-                    messages,
-                    transcriptStartIndex,
+                transcript = AgentToolBatchRecovery.completeInterrupted(AgentConversationCodec.transcript(
+                    transcript,
+                    0,
                     loop.sensitiveToolCallIdsSnapshot(),
-                ),
+                )),
             )
         }
         return ModelResponse.Text(
             content = result.content,
+            contextSnapshot = if (rewriteReply) null else loop.contextSnapshot(),
             reasoningContent = result.reasoningContent,
             transcript = AgentConversationCodec.transcript(
-                messages,
-                transcriptStartIndex,
+                transcript,
+                0,
                 result.sensitiveToolCallIds,
             ),
         )
@@ -204,7 +239,7 @@ internal object AgentModelClient {
         require(
             reasoningCapabilities?.mandatory != true ||
                 effectiveReasoningEffort != ReasoningEffort.OFF
-        ) { "当前模型强制启用推理，不能选择 Off 或禁用思考权限" }
+        ) { "当前模型强制启用思考，不能选择 Off 或禁用思考权限" }
         if (extraBodyJson.isNotBlank()) {
             runCatching { JSONObject(extraBodyJson) }
                 .getOrElse { throwable ->
@@ -266,7 +301,11 @@ internal object AgentModelClient {
         val contentJson: String = "",
         val toolCallId: String = "",
         val reasoningContent: String = "",
-        val toolCallsJson: String = ""
+        val toolCallsJson: String = "",
+        val contextSummary: Boolean = false,
+        val compactedUserTurns: Int = 0,
+        val summaryThroughUserTurn: Int = 0,
+        val messageId: String = "",
     )
 
     fun interface ToolExecutor {
@@ -304,6 +343,7 @@ internal object AgentModelClient {
             val content: String,
             val reasoningContent: String = "",
             val transcript: List<ConversationMessage> = emptyList(),
+            val contextSnapshot: AgentContextSnapshot? = null,
         ) : ModelResponse
     }
 
@@ -313,4 +353,5 @@ internal class AgentModelExecutionException(
     cause: Throwable,
     val reasoningContent: String,
     val transcript: List<AgentModelClient.ConversationMessage>,
+    val contextSnapshot: AgentContextSnapshot? = null,
 ) : RuntimeException(cause.message ?: cause.javaClass.simpleName, cause)

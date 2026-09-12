@@ -9,6 +9,7 @@ import androidx.room.migration.Migration
 
 @Database(
     entities = [
+        AgentTextChunkEntity::class,
         ConversationEntity::class,
         ConversationContextCheckpointEntity::class,
         ConversationMessageEntity::class,
@@ -22,8 +23,10 @@ import androidx.room.migration.Migration
         RuntimeInFlightEventEntity::class,
         SkillRegistryEntity::class,
         McpServerEntity::class,
+        CharacterEntity::class,
+        UserPersonaEntity::class,
     ],
-    version = 18,
+    version = 21,
     exportSchema = false,
 )
 internal abstract class EtaDatabase : RoomDatabase() {
@@ -32,6 +35,7 @@ internal abstract class EtaDatabase : RoomDatabase() {
     abstract fun runtimeRunDao(): RuntimeRunDao
     abstract fun skillDao(): SkillDao
     abstract fun mcpServerDao(): McpServerDao
+    abstract fun characterDao(): CharacterDao
 
     companion object {
         @Volatile
@@ -57,7 +61,14 @@ internal abstract class EtaDatabase : RoomDatabase() {
                         MIGRATION_15_16,
                         MIGRATION_16_17,
                         MIGRATION_17_18,
+                        MIGRATION_18_19,
+                        MIGRATION_19_20,
+                        MIGRATION_20_21,
                     )
+                    .addCallback(object : Callback() {
+                        override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
+                        override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) { createTextChunkCleanup(db) }
+                    })
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { instance = it }
@@ -68,6 +79,52 @@ internal abstract class EtaDatabase : RoomDatabase() {
             synchronized(this) {
                 instance?.close()
                 instance = null
+            }
+        }
+
+        internal val MIGRATION_19_20 = Migration(19, 20) { database ->
+            database.execSQL("ALTER TABLE conversation_context_checkpoints ADD COLUMN journal_json TEXT NOT NULL DEFAULT ''")
+            database.execSQL("ALTER TABLE runtime_inflight_runs ADD COLUMN transcript_json TEXT NOT NULL DEFAULT '[]'")
+            database.execSQL("CREATE TABLE IF NOT EXISTS agent_text_chunks (" +
+                "owner_table TEXT NOT NULL, owner_id TEXT NOT NULL, field TEXT NOT NULL, " +
+                "chunk_index INTEGER NOT NULL, content TEXT NOT NULL, " +
+                "PRIMARY KEY(owner_table, owner_id, field, chunk_index))")
+            database.execSQL("UPDATE conversation_context_checkpoints SET journal_json = history_json")
+            HistoryPayloadMigration.migrate(database)
+            createTextChunkCleanup(database)
+        }
+
+        internal val MIGRATION_20_21 = Migration(20, 21) { database ->
+            database.execSQL("ALTER TABLE conversations ADD COLUMN roleplay_json TEXT NOT NULL DEFAULT ''")
+            database.execSQL("ALTER TABLE conversations ADD COLUMN revisions_json TEXT NOT NULL DEFAULT ''")
+            listOf("runtime_results", "runtime_archive_runs", "runtime_inflight_runs").forEach { table ->
+                database.execSQL("ALTER TABLE $table ADD COLUMN rewrite_target_message_id TEXT")
+            }
+            database.execSQL("CREATE TABLE IF NOT EXISTS roleplay_characters (" +
+                "id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, card_json TEXT NOT NULL, " +
+                "avatar_path TEXT, archived INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+            database.execSQL("CREATE TABLE IF NOT EXISTS roleplay_user_persona (" +
+                "id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL)")
+            createTextChunkCleanup(database)
+        }
+
+        private fun createTextChunkCleanup(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+            mapOf("runtime_results" to "run_id", "runtime_archive_runs" to "archive_run_id",
+                "runtime_inflight_runs" to "run_id", "conversation_context_checkpoints" to "conversation_id",
+                "conversation_messages" to "id", "conversations" to "id")
+                .plus(if (database.version >= 21 || database.query(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'roleplay_characters'"
+                ).use { it.moveToFirst() }) mapOf("roleplay_characters" to "id", "roleplay_user_persona" to "id") else emptyMap())
+                .forEach { (table, key) ->
+                    database.execSQL("CREATE TRIGGER IF NOT EXISTS ${table}_text_cleanup AFTER DELETE ON $table " +
+                        "BEGIN DELETE FROM agent_text_chunks WHERE owner_table = '$table' AND owner_id = OLD.$key; END")
+                }
+        }
+
+        internal val MIGRATION_18_19 = Migration(18, 19) { database ->
+            listOf("runtime_results", "runtime_archive_runs", "runtime_inflight_runs").forEach { table ->
+                database.execSQL("ALTER TABLE $table ADD COLUMN context_snapshot_json TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE $table ADD COLUMN operation TEXT NOT NULL DEFAULT 'chat'")
             }
         }
 
@@ -161,11 +218,9 @@ internal abstract class EtaDatabase : RoomDatabase() {
             )
             database.execSQL(
                 "INSERT INTO conversation_context_checkpoints (conversation_id, history_json) " +
-                    "SELECT id, CASE " +
-                    "WHEN length(CAST(history_json AS BLOB)) <= 131072 THEN history_json " +
-                    "ELSE '[]' END FROM conversations"
+                    "SELECT id, history_json FROM conversations"
             )
-            // 会话列表不再使用旧字段；及时清空可保证旧版留下的超大行不会继续占用数据库。
+            // SQL 内搬移完整正文；后续分块迁移负责行大小，不能因旧字段过大丢弃历史。
             database.execSQL("UPDATE conversations SET history_json = '[]'")
         }
 

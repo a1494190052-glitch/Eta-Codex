@@ -2,7 +2,7 @@ package io.github.mangi.eta.data.repository
 
 import io.github.mangi.eta.agent.model.AgentHttpClient
 import io.github.mangi.eta.agent.model.CodexRequestAuthenticator
-import io.github.mangi.eta.agent.model.CustomHeaderFilter
+import io.github.mangi.eta.agent.model.ProviderRequestHeaders
 import io.github.mangi.eta.agent.model.ProviderUrls
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
 import io.github.mangi.eta.data.model.Model
@@ -78,7 +78,7 @@ internal object RemoteModelFetcher {
         fun buildRequest(forceRefresh: Boolean): Request {
             val headers = okhttp3.Headers.Builder()
                 .add("Accept", "application/json")
-            CustomHeaderFilter.mergeInto(headers, provider.customHeaders)
+            ProviderRequestHeaders.mergeInto(headers, provider.baseUrl, provider.customHeaders)
             headers.removeAll("Accept")
             headers.add("Accept", "application/json")
             CodexRequestAuthenticator.apply(
@@ -140,7 +140,7 @@ internal object RemoteModelFetcher {
                         if (provider.apiKey.isNotBlank()) {
                             add("Authorization", "Bearer ${provider.apiKey}")
                         }
-                        CustomHeaderFilter.mergeInto(this, provider.customHeaders)
+                        ProviderRequestHeaders.mergeInto(this, provider.baseUrl, provider.customHeaders)
                     }
                     .build()
             )
@@ -160,7 +160,7 @@ internal object RemoteModelFetcher {
                         if (provider.apiKey.isNotBlank()) {
                             add("x-api-key", provider.apiKey)
                         }
-                        CustomHeaderFilter.mergeInto(this, provider.customHeaders)
+                        ProviderRequestHeaders.mergeInto(this, provider.baseUrl, provider.customHeaders)
                     }
                     .build()
             )

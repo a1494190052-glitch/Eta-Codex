@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <resources>
+  <string name="settings_language">Language</string>
+  <string name="settings_language_system">Follow system</string>
   <string name="app_name">Eta</string>
   <string name="xposed_description">A system-level AI agent that takes over Breeno and Super XiaoAI, enables Gemini and Circle to Search, and integrates browser, terminal, and device tools.</string>
   <string name="agent_accessibility_label">Eta Agent</string>
   <string name="agent_accessibility_description">Read screen content and perform taps, swipes, text input, and other actions to help the agent complete tasks.</string>
   <string name="notification_history_service_label">Eta notification history</string>
-  <string name="voice_interaction_service_label">Eta assistant</string>
+  <string name="voice_interaction_service_label">Eta</string>
   <string name="recognition_service_label">Eta speech recognition</string>
   <string name="action_back">Back</string>
   <string name="action_cancel">Cancel</string>
@@ -18,6 +20,7 @@
   <string name="action_stop">Stop</string>
   <string name="action_edit">Edit</string>
   <string name="action_rename">Rename</string>
+  <string name="action_export">Export</string>
   <string name="action_done">Done</string>
   <string name="action_add">Add</string>
   <string name="action_remove">Remove</string>
@@ -184,6 +187,17 @@
     <item quantity="other">This will delete %d later turns and regenerate from this message.</item>
   </plurals>
   <string name="conversation_regenerate_current_turn">The current turn will be replaced with a newly generated response.</string>
+  <string name="conversation_exported">Exported</string>
+  <string name="conversation_export_failed">Export failed</string>
+  <string name="conversation_export_user">User</string>
+  <string name="conversation_export_assistant">Assistant</string>
+  <string name="conversation_export_thinking">Thinking</string>
+  <string name="conversation_export_tool_line">Tool: %1$s (%2$s)</string>
+  <string name="conversation_export_tools_line">Tools: %1$s</string>
+  <string name="conversation_export_tool_arguments">Arguments: %1$s</string>
+  <string name="conversation_export_tool_result">Result: %1$s</string>
+  <string name="conversation_export_images">Images: %1$d</string>
+  <string name="conversation_export_default_name">Conversation</string>
   <string name="time_yesterday">Yesterday</string>
   <string name="time_recent">Recent</string>
   <string name="time_now">Now</string>
@@ -219,23 +233,18 @@
   <string name="overlay_result_ready">Result ready</string>
   <string name="overlay_run_failed">Request failed</string>
   <string name="overlay_generating_answer">Generating answer</string>
-  <string name="overlay_substatus_running">Working</string>
-  <string name="overlay_substatus_paused">Paused · tap to continue</string>
   <string name="overlay_substatus_finished">Completed</string>
   <string name="overlay_substatus_failed">Failed</string>
   <string name="overlay_pause">Pause</string>
   <string name="overlay_resume">Resume</string>
-  <string name="overlay_dismiss">Dismiss</string>
-  <string name="overlay_expand">Expand</string>
-  <string name="overlay_collapse">Collapse</string>
   <string name="overlay_supplement">Add input</string>
-  <string name="overlay_supplement_hint">Add instructions and Eta will continue the current task</string>
+  <string name="overlay_supplement_hint">Add instructions; Eta continues the current task</string>
   <string name="overlay_send">Send</string>
   <string name="overlay_stopping">Stopping</string>
   <string name="overlay_paused">Paused</string>
   <string name="overlay_continuing">Continuing</string>
-  <string name="overlay_finishing">The task is finishing. Add more input after the result appears</string>
-  <string name="overlay_continuation_unavailable">This entry point does not support additional input</string>
+  <string name="overlay_finishing">Finishing up. Add input after the result appears</string>
+  <string name="overlay_continuation_unavailable">Additional input not supported here</string>
   <string name="overlay_stopped">Stopped</string>
   <string name="tool_observe_screen">Observe screen</string>
   <string name="tool_tap">Tap</string>
@@ -297,7 +306,7 @@
   <string name="ui_apk_analysis_95ad17">APK analysis</string>
   <string name="ui_agent_and_local_tools_can_still_be_used_but_the_syst_b14479">Agent and local tools remain available. System assistant takeover, Gemini, and Circle to Search settings cannot be changed right now.</string>
   <string name="ui_endpoint_mode_3c8546">Endpoint mode</string>
-  <string name="ui_eta_system_assistant_003e9b">Eta system assistant</string>
+  <string name="ui_eta_system_assistant_003e9b">Digital assistant app</string>
   <string name="ui_lsposed_service_is_not_connected_44734d">LSPosed service is not connected</string>
   <string name="ui_linux_tool_environment_314d22">Linux tool environment</string>
   <string name="ui_the_entire_contents_of_memory_md_will_be_deleted_and_83a8ac">The entire contents of MEMORY.md will be deleted and the memory switch will remain in its current state.</string>
@@ -308,7 +317,6 @@
   <string name="ui_bright_screen_evokes_automatic_voice_input_4358fe">Bright screen evokes automatic voice input</string>
   <string name="ui_only_take_over_with_agent_prefix_d17556">Only take over with /agent prefix</string>
   <string name="ui_only_check_the_ranges_actually_supported_by_the_mode_2c343d">Only check the ranges actually supported by the model or gateway; unsupported combinations will clearly report an error before requesting.</string>
-  <string name="ui_valid_only_for_gemini_and_eta_d5b63d">Valid only for Gemini and Eta</string>
   <string name="ui_preferences_and_strategies_2abd3c">Preferences and Strategies</string>
   <string name="ui_stop_a17f70">stop</string>
   <string name="ui_allow_sensitive_device_operation_3d42ea">Allow sensitive device operation</string>
@@ -876,8 +884,6 @@
   <string name="settings_open_assistant_failed">Couldn\'t open default assistant settings</string>
   <string name="settings_model_not_selected">No model selected</string>
   <string name="settings_not_configured">Not configured</string>
-  <string name="settings_default_assistant_active">Set as default digital assistant</string>
-  <string name="settings_select_default_assistant">Select Eta as the default digital assistant</string>
   <string name="status_authorized">Authorized</string>
   <string name="status_unauthorized">Not authorized</string>
   <string name="status_enabled">Enabled</string>
@@ -1079,10 +1085,10 @@
   <string name="model_switch_current">Switch model. Current: %1$s</string>
   <string name="model_collapse_provider">Collapse %1$s</string>
   <string name="model_expand_provider">Expand %1$s</string>
-  <string name="context_no_previous_usage">No usage data from the previous response</string>
-  <string name="context_no_model_limit">The current model does not provide a context limit</string>
-  <string name="context_usage_after_response">%1$s\nServer-measured usage will appear after a response</string>
-  <string name="context_usage_previous_response">%1$s\nMeasured by the server for the previous response</string>
+  <string name="context_no_previous_usage">No usage data yet</string>
+  <string name="context_no_model_limit">This model has no context limit</string>
+  <string name="context_usage_after_response">Measured after the first response</string>
+  <string name="context_usage_previous_response">%1$s\nMeasured last turn</string>
   <string name="context_usage_description">Context usage: %1$s</string>
   <string name="memory_budget_summary">Inject up to %1$s characters per turn. The model reads detailed content as needed</string>
   <string name="memory_over_limit">Over the 1 MiB limit. Remove some content</string>
@@ -1172,4 +1178,7 @@
   <string name="data_backup_imported">Imported %1$d conversations and %2$d providers</string>
   <string name="data_backup_failed">Backup operation failed</string>
   <string name="data_backup_file_open_failed">Unable to open the selected file</string>
+  <string name="context_compaction">Context compaction</string>
+  <string name="context_compact_action">Compact context</string>
+  <string name="context_usage_estimated">%1$s\nEstimated after compaction</string>
 </resources>

@@ -42,7 +42,10 @@ internal class AgentModelRetry(
                 controller.throwIfCancelled()
                 if (callbackFailed || Thread.currentThread().isInterrupted) throw failure
                 val classified = AgentModelFailure.transport(failure) ?: throw failure
-                if (!classified.retryable || hostedToolStarted) throw classified
+                if (hostedToolStarted) throw AgentModelFailure(
+                    classified.code, false, classified.message.orEmpty(), classified, recoveryAllowed = false,
+                )
+                if (!classified.retryable) throw classified
                 if (retries == MAX_RETRIES) {
                     throw AgentModelFailure(
                         classified.code, false,
@@ -55,7 +58,7 @@ internal class AgentModelRetry(
                 onEvent(AgentEvent.ModelRetryScheduled(round, retries, MAX_RETRIES, delayMs.toInt(), classified.code))
                 waitBeforeRetry(controller, delayMs)
                 controller.throwIfCancelled()
-                // 展示保留失败尝试，模型上下文与最终推理摘要只接纳成功尝试。
+                // 展示保留失败尝试，模型上下文与最终思考摘要只接纳成功尝试。
                 discardAttemptReasoning()
                 round += 1
             }

@@ -124,6 +124,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 internal fun AgentChatBody(
     messages: List<AgentChatMessageUi>,
     modelPickerState: AgentModelPickerUiState,
+    isCompacting: Boolean,
     input: String,
     isStreaming: Boolean,
     reasoningEffort: ReasoningEffort,
@@ -132,6 +133,8 @@ internal fun AgentChatBody(
     pendingFileReferences: List<PendingFileReferenceUi>,
     messageEdit: MessageEditUiState?,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    onCompactContext: () -> Unit,
+    canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onStop: () -> Unit,
@@ -145,9 +148,11 @@ internal fun AgentChatBody(
     onCancelMessageEdit: () -> Unit,
     onDeleteMessage: (String) -> Unit,
     onRegenerateMessage: (String) -> Unit,
+    onSelectReplyCandidate: (String, Int) -> Unit,
     onSuggestionClick: (String) -> Unit,
     onRunTraceClick: () -> Unit,
     onOpenBrowser: () -> Unit,
+    characterName: String? = null,
     isDrawerOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -161,10 +166,10 @@ internal fun AgentChatBody(
         latestContextUsage(messages, modelPickerState.selectedModel)
     }
 
-    val visibleMessages = remember(messages, messageEdit?.targetMessageId) {
+    val visibleMessages = remember(messages, messageEdit?.targetMessageId, messageEdit?.preserveFollowingMessages) {
         AgentConversationRevisionReducer.visibleMessagesForEdit(
             messages = messages,
-            targetMessageId = messageEdit?.targetMessageId,
+            targetMessageId = messageEdit?.takeUnless { it.preserveFollowingMessages }?.targetMessageId,
         ).filterNot { message ->
             message is AgentMessageUi && message.content.isBlank()
         }
@@ -210,6 +215,7 @@ internal fun AgentChatBody(
         scrollState = scrollState,
         input = input,
         modelPickerState = modelPickerState,
+        isCompacting = isCompacting,
         contextUsage = contextUsage,
         isStreaming = isStreaming,
         reasoningEffort = reasoningEffort,
@@ -218,6 +224,7 @@ internal fun AgentChatBody(
         pendingFileReferences = pendingFileReferences,
         messageEdit = messageEdit,
         showEmptySuggestions = !isKeyboardVisible,
+        characterName = characterName,
         keepBottomAnchored = keepBottomAnchored,
         onBottomAnchorChanged = { keepBottomAnchored = it },
         onSubmit = { text ->
@@ -228,6 +235,8 @@ internal fun AgentChatBody(
             onSubmit(text)
         },
         onReasoningEffortChange = onReasoningEffortChange,
+        onCompactContext = onCompactContext,
+        canCompactContext = canCompactContext,
         onModelSelected = onModelSelected,
         onStop = onStop,
         onAttachImage = onAttachImage,
@@ -240,6 +249,7 @@ internal fun AgentChatBody(
         onCancelMessageEdit = onCancelMessageEdit,
         onDeleteMessage = onDeleteMessage,
         onRegenerateMessage = onRegenerateMessage,
+        onSelectReplyCandidate = onSelectReplyCandidate,
         onSuggestionClick = onSuggestionClick,
         onRunTraceClick = onRunTraceClick,
         onOpenBrowser = onOpenBrowser,
@@ -256,6 +266,7 @@ private fun AgentChatScaffold(
     scrollState: LazyListState,
     input: String,
     modelPickerState: AgentModelPickerUiState,
+    isCompacting: Boolean,
     contextUsage: AgentContextUsageUi,
     isStreaming: Boolean,
     reasoningEffort: ReasoningEffort,
@@ -264,10 +275,13 @@ private fun AgentChatScaffold(
     pendingFileReferences: List<PendingFileReferenceUi>,
     messageEdit: MessageEditUiState?,
     showEmptySuggestions: Boolean,
+    characterName: String?,
     keepBottomAnchored: Boolean,
     onBottomAnchorChanged: (Boolean) -> Unit,
     onSubmit: (String) -> Unit,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    onCompactContext: () -> Unit,
+    canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
     onStop: () -> Unit,
     onAttachImage: (String) -> Unit,
@@ -280,6 +294,7 @@ private fun AgentChatScaffold(
     onCancelMessageEdit: () -> Unit,
     onDeleteMessage: (String) -> Unit,
     onRegenerateMessage: (String) -> Unit,
+    onSelectReplyCandidate: (String, Int) -> Unit,
     onSuggestionClick: (String) -> Unit,
     onRunTraceClick: () -> Unit,
     onOpenBrowser: () -> Unit,
@@ -308,6 +323,7 @@ private fun AgentChatScaffold(
                 messageBackdrop = messageBackdrop.takeIf { frostEnabled },
                 input = input,
                 modelPickerState = modelPickerState,
+                isCompacting = isCompacting,
                 contextUsage = contextUsage,
                 showContextUsage = hasMessages,
                 isStreaming = isStreaming,
@@ -318,6 +334,8 @@ private fun AgentChatScaffold(
                 messageEdit = messageEdit,
                 onSubmit = onSubmit,
                 onReasoningEffortChange = onReasoningEffortChange,
+                onCompactContext = onCompactContext,
+                canCompactContext = canCompactContext,
                 onModelSelected = onModelSelected,
                 onStop = onStop,
                 onAttachImage = onAttachImage,
@@ -334,6 +352,7 @@ private fun AgentChatScaffold(
         if (!hasMessages) {
             EmptyChatState(
                 showSuggestions = showEmptySuggestions,
+                characterName = characterName,
                 onSuggestionClick = onSuggestionClick,
                 modifier = Modifier
                     .fillMaxSize()
@@ -353,6 +372,7 @@ private fun AgentChatScaffold(
                 onEditMessage = onEditMessage,
                 onDeleteMessage = onDeleteMessage,
                 onRegenerateMessage = onRegenerateMessage,
+                onSelectReplyCandidate = onSelectReplyCandidate,
                 messageActionsEnabled = !isStreaming && messageEdit == null,
                 editTargetMessageId = messageEdit?.targetMessageId,
                 currentBrowserMessageId = currentBrowserMessageId,
@@ -379,6 +399,7 @@ internal fun AgentConversationMessages(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     onRegenerateMessage: (String) -> Unit = {},
+    onSelectReplyCandidate: (String, Int) -> Unit = { _, _ -> },
     messageActionsEnabled: Boolean = false,
     editTargetMessageId: String? = null,
     currentBrowserMessageId: String? = null,
@@ -617,13 +638,15 @@ internal fun AgentConversationMessages(
                                 message.toolName == "browser_use" &&
                                 message.id == currentBrowserMessageId,
                             showCopyAction = message !is AgentMessageUi ||
-                                message.id in finalResultMessageIds,
-                            showMessageActions = message.id in finalResultMessageIds,
+                                message.characterEditable || message.id in finalResultMessageIds,
+                            showMessageActions = message.id in finalResultMessageIds ||
+                                (message is AgentMessageUi && message.characterEditable),
                             messageActionsEnabled = messageActionsEnabled,
                             isEditing = message.id == editTargetMessageId,
                             onEditMessage = onEditMessage,
                             onDeleteMessage = onDeleteMessage,
                             onRegenerateMessage = onRegenerateMessage,
+                            onSelectReplyCandidate = onSelectReplyCandidate,
                             modifier = itemModifier,
                         )
                     }
@@ -806,6 +829,7 @@ private fun AgentChatBottomBar(
     messageBackdrop: LayerBackdrop?,
     input: String,
     modelPickerState: AgentModelPickerUiState,
+    isCompacting: Boolean,
     contextUsage: AgentContextUsageUi,
     showContextUsage: Boolean,
     isStreaming: Boolean,
@@ -816,6 +840,8 @@ private fun AgentChatBottomBar(
     messageEdit: MessageEditUiState?,
     onSubmit: (String) -> Unit,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
+    onCompactContext: () -> Unit,
+    canCompactContext: Boolean,
     onModelSelected: (String) -> Unit,
     onStop: () -> Unit,
     onAttachImage: (String) -> Unit,
@@ -887,6 +913,7 @@ private fun AgentChatBottomBar(
             AgentChatInputBar(
                 input = input,
                 modelPickerState = modelPickerState,
+                isCompacting = isCompacting,
                 contextUsage = contextUsage,
                 showContextUsage = showContextUsage,
                 isStreaming = isStreaming,
@@ -896,8 +923,11 @@ private fun AgentChatBottomBar(
                 pendingFileReferences = pendingFileReferences,
                 isEditingMessage = messageEdit != null,
                 editHasLaterTurns = messageEdit?.hasLaterTurns == true,
+                preserveFollowingMessages = messageEdit?.preserveFollowingMessages == true,
                 onSubmit = onSubmit,
                 onReasoningEffortChange = onReasoningEffortChange,
+                onCompactContext = onCompactContext,
+                canCompactContext = canCompactContext,
                 onModelSelected = onModelSelected,
                 onStop = onStop,
                 onAttachImage = onAttachImage,
@@ -948,9 +978,11 @@ internal fun shouldRequestInitialBottom(
 @Composable
 private fun EmptyChatState(
     showSuggestions: Boolean,
+    characterName: String?,
     onSuggestionClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isCharacterConversation = characterName != null
     val suggestions = listOf(
         SuggestionItem(
             title = stringResource(R.string.ui_analyze_current_screen_ebf08f),
@@ -981,16 +1013,30 @@ private fun EmptyChatState(
                 .padding(bottom = 56.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = stringResource(R.string.ui_how_can_i_help_you_e75391),
-                style = MiuixTheme.textStyles.headline1,
-                color = MiuixTheme.colorScheme.onSurface,
-            )
+            if (isCharacterConversation) {
+                Text(
+                    text = characterName.orEmpty(),
+                    style = MiuixTheme.textStyles.title2,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "故事从这里开始",
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            } else {
+                Text(
+                    text = stringResource(R.string.ui_how_can_i_help_you_e75391),
+                    style = MiuixTheme.textStyles.headline1,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+            }
 
             Spacer(modifier = Modifier.height(30.dp))
 
             AnimatedVisibility(
-                visible = showSuggestions,
+                visible = showSuggestions && !isCharacterConversation,
                 enter = fadeIn(
                     animationSpec = tween(durationMillis = 220)
                 ) + slideInVertically(

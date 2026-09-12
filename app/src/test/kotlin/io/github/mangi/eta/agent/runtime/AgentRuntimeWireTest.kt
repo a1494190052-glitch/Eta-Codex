@@ -25,6 +25,82 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 class AgentRuntimeWireTest {
     @Test
+    fun replyRewriteTargetSurvivesRequestResultAndDrain() {
+        val request = AgentRuntimeWire.RunRequest(
+            runId = "rewrite-1", prompt = "原回复", images = emptyList(),
+            config = AgentModelClient.ModelConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "test", systemPrompt = "",
+                reasoningEffort = ReasoningEffort.OFF),
+            operation = AgentRuntimeWire.OP_REWRITE_REPLY, rewriteTargetMessageId = "assistant-1",
+        )
+        assertEquals(request, AgentRuntimeWire.runRequestFromBundle(AgentRuntimeWire.toLegacyBundle(request)))
+        val result = AgentRuntimeWire.RunResult("rewrite-1", true, "新回复", operation = AgentRuntimeWire.OP_REWRITE_REPLY,
+            rewriteTargetMessageId = "assistant-1")
+        assertEquals(result, AgentRuntimeWire.runResultFromBundle(AgentRuntimeWire.toBundle(result)))
+        val completed = AgentRuntimeWire.CompletedRun(
+            AgentRuntimeWire.EntryHandoff("rewrite-1", AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, "conversation"), result, 1,
+        )
+        val drained = AgentRuntimeWire.completedRunsFromBundle(AgentRuntimeWire.completedRunsToBundle(listOf(completed))).single()
+        assertEquals("assistant-1", drained.result.rewriteTargetMessageId)
+        assertEquals(AgentRuntimeWire.OP_REWRITE_REPLY, drained.result.operation)
+    }
+
+    @Test
+    fun replyRewriteDoesNotAcceptSteering() {
+        val session = AgentRuntimeSession("rewrite-1", operation = AgentRuntimeWire.OP_REWRITE_REPLY)
+        assertFalse(session.steer("额外请求"))
+        assertNull(session.steer("额外请求") { AgentEvent.UserSupplementReceived(1, "额外请求") })
+    }
+
+    @Test
+    fun contextSnapshotRoundTripsDirectlyAndDrainOnlyCarriesReference() {
+        val snapshot = io.github.mangi.eta.agent.model.AgentContextSnapshot(
+            operationId = "compact-1", consumedUserTurns = 4, coveredUserTurns = 3,
+            messages = listOf(AgentModelClient.ConversationMessage("assistant", "摘要内容", contextSummary = true, compactedUserTurns = 3)),
+        )
+        val result = AgentRuntimeWire.RunResult("compact-1", true, "", contextSnapshot = snapshot,
+            operation = AgentRuntimeWire.OP_COMPACT)
+        assertEquals(result, AgentRuntimeWire.runResultFromBundle(AgentRuntimeWire.toBundle(result)))
+        val completed = AgentRuntimeWire.CompletedRun(
+            AgentRuntimeWire.EntryHandoff("compact-1", AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE, "conversation"), result, 1,
+        )
+        val drained = AgentRuntimeWire.completedRunsFromBundle(AgentRuntimeWire.completedRunsToBundle(listOf(completed))).single()
+        assertNull(drained.result.contextSnapshot)
+        assertEquals("compact-1", drained.result.contextSnapshotRef)
+        val event = AgentEvent.ContextCompaction("operation", "completed", 9000, 2000)
+        assertEquals(event, AgentEventJsonCodec.decode(AgentEventJsonCodec.encode(event)))
+        val legacy = AgentRuntimeWire.toBundle(result).apply {
+            remove("complete_result_json")
+            remove("context_snapshot")
+            remove("operation")
+        }
+        assertNull(AgentRuntimeWire.runResultFromBundle(legacy).contextSnapshot)
+        assertEquals(AgentRuntimeWire.OP_CHAT, AgentRuntimeWire.runResultFromBundle(legacy).operation)
+    }
+
+    @Test
+    fun modelSessionSurvivesIpcAndLegacyRequestsUseConversationIdentity() {
+        val request = AgentRuntimeWire.RunRequest(
+            runId = "run-session", prompt = "测试",
+            config = AgentModelClient.ModelConfig(
+                baseUrl = "https://example.invalid/v1", apiKey = "test-key",
+                model = "test-model", systemPrompt = "", reasoningEffort = ReasoningEffort.OFF,
+            ),
+            images = emptyList(),
+            modelSessionId = "stable-session",
+            handoff = AgentRuntimeWire.EntryHandoff(
+                id = "handoff", source = AgentRuntimeWire.AGENT_UI_HANDOFF_SOURCE,
+                payload = AgentUiHandoffPayload("conversation-1").toJson(),
+            ),
+        )
+        val bundle = AgentRuntimeWire.toLegacyBundle(request)
+        assertEquals(request, AgentRuntimeWire.runRequestFromBundle(bundle))
+        bundle.remove("model_session_id")
+        assertEquals("conversation-1", AgentRuntimeWire.runRequestFromBundle(bundle).effectiveModelSessionId)
+        bundle.remove("handoff")
+        assertEquals("run-session", AgentRuntimeWire.runRequestFromBundle(bundle).effectiveModelSessionId)
+    }
+
+    @Test
     fun retryEventSurvivesIpcAndArchiveJson() {
         val event = AgentEvent.ModelRetryScheduled(7, 2, 3, 4_000, "MODEL_TIMEOUT")
         assertEquals(event, AgentRuntimeWire.eventFromBundle(AgentRuntimeWire.eventToBundle(event)))

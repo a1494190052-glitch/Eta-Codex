@@ -255,6 +255,7 @@ internal fun AgentChatBody(
         onRunTraceClick = onRunTraceClick,
         onOpenBrowser = onOpenBrowser,
         currentBrowserMessageId = currentBrowserMessageId,
+        characterHtmlHost = characterHtmlHost,
         modifier = modifier,
     )
 }
@@ -300,6 +301,7 @@ private fun AgentChatScaffold(
     onRunTraceClick: () -> Unit,
     onOpenBrowser: () -> Unit,
     currentBrowserMessageId: String?,
+    characterHtmlHost: CharacterHtmlHost? = null,
     modifier: Modifier = Modifier,
 ) {
     val surfaceColor = MiuixTheme.colorScheme.surface

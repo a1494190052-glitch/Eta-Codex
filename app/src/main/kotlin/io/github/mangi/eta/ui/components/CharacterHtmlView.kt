@@ -152,10 +152,10 @@ internal fun CharacterHtmlView(
                             override fun onPageFinished(view: WebView, url: String?) {
                                 view.postDelayed({ reportHeight(view) }, 50)
                                 view.postDelayed({ reportHeight(view) }, 350)
-                                view.postDelayed {
+                                view.postDelayed({
                                     reportHeight(view)
                                     measureSettled = true
-                                }
+                                }, 900)
                             }
 
                             override fun shouldOverrideUrlLoading(

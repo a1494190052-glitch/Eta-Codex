@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -26,6 +25,8 @@ import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import io.github.mangi.eta.core.AndroidAgentLogger
+import io.github.mangi.eta.core.safeLogType
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -37,6 +38,12 @@ internal sealed interface CharacterHtmlAction {
     data class SendText(val text: String) : CharacterHtmlAction
     data object Regenerate : CharacterHtmlAction
     data class SetVariable(val name: String, val value: String) : CharacterHtmlAction
+}
+
+private fun CharacterHtmlAction.actionLogName(): String = when (this) {
+    is CharacterHtmlAction.SendText -> "send"
+    is CharacterHtmlAction.SetVariable -> "setvar"
+    CharacterHtmlAction.Regenerate -> "regenerate"
 }
 
 /**
@@ -78,6 +85,9 @@ internal data class CharacterHtmlHost(
  *   常见的 jquery/lodash/font CDN 请求返回 App 内置副本或空资源
  * - 无文件/内容访问、无弹窗、无多窗口、禁缓存；所有页面导航被拒绝
  * - CSP 限制资源来源；内联脚本仅能操作本面板 DOM，除白名单桥外无任何原生能力
+ *
+ * 显示节奏：面板在首次稳定测高之前保持隐藏，测稳后一次性出现；
+ * 避免加载期间"低占位 → 全高度 → 多次微调"的可见跳动（闪烁）。
  */
 @Composable
 internal fun CharacterHtmlView(
@@ -88,11 +98,8 @@ internal fun CharacterHtmlView(
 ) {
     val bridgeEnabled = host?.scriptsEnabled == true
     val density = LocalDensity.current
-    var heightPx by remember { mutableIntStateOf(0) }
-    var measureSettled by remember { mutableStateOf(false) }
-    val maxHeightPx = with(density) { 1400.dp.toPx().toInt() }
     val minHeightPx = with(density) { 24.dp.toPx().toInt() }
-    // 页面已加载但测高失败（0）时给出兜底高度：宁可多占空间也避免"什么都看不到"。
+    val maxHeightPx = with(density) { 1400.dp.toPx().toInt() }
     val fallbackHeightPx = with(density) { 160.dp.toPx().toInt() }
 
     key(html, bridgeEnabled) {
@@ -101,6 +108,8 @@ internal fun CharacterHtmlView(
         val wrapped = remember(html, isDark) {
             wrapHtmlDocument(html, isDark)
         }
+        // 0 表示"尚未测稳"：此时面板不可见，仅保留最小占位，高度确定后再显示。
+        var heightPx by remember { mutableIntStateOf(0) }
         Box(
             modifier = modifier
                 .fillMaxWidth()
@@ -111,17 +120,15 @@ internal fun CharacterHtmlView(
                     .fillMaxWidth()
                     .height(
                         with(density) {
-                            val effective = when {
-                                heightPx > 0 -> heightPx
-                                measureSettled -> fallbackHeightPx
-                                else -> minHeightPx
-                            }
-                            effective.coerceAtLeast(minHeightPx).toDp()
+                            val effective = if (heightPx > 0) heightPx else minHeightPx
+                            effective.coerceIn(minHeightPx, maxHeightPx).toDp()
                         },
                     ),
                 factory = { context ->
                     WebView(context).apply {
+                        val panelView = this
                         setBackgroundColor(Color.TRANSPARENT)
+                        alpha = 0f
                         // 面板渲染依赖内联脚本（状态栏/面板由卡脚本生成 DOM）。
                         // 交互桥（原生能力）仍由"允许卡内脚本交互"开关严格控制。
                         settings.javaScriptEnabled = true
@@ -139,23 +146,26 @@ internal fun CharacterHtmlView(
                         if (bridgeEnabled) {
                             addJavascriptInterface(bridge, "EtaNative")
                         }
-                        webViewClient = object : WebViewClient() {
-                            private fun reportHeight(view: WebView) {
-                                val measured = view.contentHeight
-                                if (measured <= 0) return
-                                // 高度防抖：测量窗口内的细小波动不触发重排，避免面板持续跳动。
-                                if (heightPx == 0 || kotlin.math.abs(measured - heightPx) > 12) {
-                                    heightPx = measured.coerceAtMost(maxHeightPx)
+                        val heightTracker = PanelHeightTracker(
+                            view = panelView,
+                            minHeightPx = minHeightPx,
+                            maxHeightPx = maxHeightPx,
+                            fallbackHeightPx = fallbackHeightPx,
+                            onHeight = { target ->
+                                heightPx = target
+                                if (panelView.alpha < 1f) {
+                                    runCatching {
+                                        panelView.animate()
+                                            .alpha(1f)
+                                            .setDuration(HEIGHT_FADE_IN_MS)
+                                            .start()
+                                    }
                                 }
-                            }
-
+                            },
+                        )
+                        webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
-                                view.postDelayed({ reportHeight(view) }, 50)
-                                view.postDelayed({ reportHeight(view) }, 350)
-                                view.postDelayed({
-                                    reportHeight(view)
-                                    measureSettled = true
-                                }, 900)
+                                heightTracker.restart()
                             }
 
                             override fun shouldOverrideUrlLoading(
@@ -174,6 +184,8 @@ internal fun CharacterHtmlView(
                             }
                         }
                         loadDataWithBaseURL(null, wrapped, "text/html", "utf-8", null)
+                        // onPageFinished 未触发或始终测不到高度时的兜底显示，保证面板最终可见。
+                        postDelayed({ heightTracker.hardFallback() }, HEIGHT_HARD_FALLBACK_MS)
                     }
                 },
                 update = { },
@@ -183,6 +195,78 @@ internal fun CharacterHtmlView(
                     runCatching { view.destroy() }
                 },
             )
+        }
+    }
+}
+
+/**
+ * 面板高度收敛控制器：采样直到连续稳定，之后一次性发布；
+ * 发布后仅复核两次明显变化（字体/图片晚到），避免持续重排。
+ */
+private class PanelHeightTracker(
+    private val view: WebView,
+    private val minHeightPx: Int,
+    private val maxHeightPx: Int,
+    private val fallbackHeightPx: Int,
+    private val onHeight: (Int) -> Unit,
+) {
+    private var lastSample = -1
+    private var stableSamples = 0
+    private var probes = 0
+    private var publishedHeight = -1
+
+    fun restart() {
+        lastSample = -1
+        stableSamples = 0
+        probes = 0
+        view.postDelayed({ sample() }, HEIGHT_FIRST_PROBE_DELAY_MS)
+    }
+
+    fun hardFallback() {
+        if (publishedHeight >= 0) return
+        val measured = runCatching { view.contentHeight }.getOrDefault(0)
+        publish(if (measured > 0) measured else fallbackHeightPx)
+    }
+
+    private fun sample() {
+        runCatching {
+            probes++
+            val measured = view.contentHeight
+            if (measured > 0) {
+                val stable = lastSample >= 0 &&
+                    kotlin.math.abs(measured - lastSample) <= HEIGHT_STABLE_DELTA_PX
+                stableSamples = if (stable) stableSamples + 1 else 0
+                lastSample = measured
+            } else {
+                stableSamples = 0
+            }
+            val settled = measured > 0 && stableSamples >= HEIGHT_STABLE_SAMPLES
+            if (settled || probes >= MAX_HEIGHT_PROBES) {
+                publish(if (measured > 0) measured else fallbackHeightPx)
+            } else {
+                view.postDelayed({ sample() }, HEIGHT_PROBE_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun publish(target: Int) {
+        val clamped = target.coerceIn(minHeightPx, maxHeightPx)
+        publishedHeight = clamped
+        onHeight(clamped)
+        view.postDelayed({ recheck() }, HEIGHT_RECHECK_FIRST_DELAY_MS)
+        view.postDelayed({ recheck() }, HEIGHT_RECHECK_SECOND_DELAY_MS)
+    }
+
+    private fun recheck() {
+        runCatching {
+            val measured = view.contentHeight
+            if (measured > 0) {
+                val clamped = measured.coerceIn(minHeightPx, maxHeightPx)
+                if (publishedHeight < 0 || kotlin.math.abs(clamped - publishedHeight) > HEIGHT_RECHECK_DELTA_PX) {
+                    publishedHeight = clamped
+                    onHeight(clamped)
+                }
+            }
         }
     }
 }
@@ -222,24 +306,49 @@ private class EtaBridge : Any() {
 
     @JavascriptInterface
     fun action(payload: String) {
-        val host = host ?: return
+        if (host == null) return
         val action = parseAction(payload) ?: return
-        mainHandler.post { host.onAction(action) }
+        mainHandler.post {
+            val activeHost = host ?: return@post
+            AndroidAgentLogger.info("character html action: ${action.actionLogName()}")
+            // 最终兜底：卡内动作（含"重新生成"这类会绕过上层防护的转发路径）异常时
+            // 只记录并丢弃本次动作，绝不允许未捕获异常从 JS 桥抛到主线程闪退整界面。
+            runCatching { activeHost.onAction(action) }.onFailure { throwable ->
+                AndroidAgentLogger.error(
+                    "character html action failed: ${action.actionLogName()} type=${throwable.safeLogType()}",
+                )
+            }
+        }
     }
 
     @JavascriptInterface
     fun getVar(name: String): String {
         val safeName = name.take(128)
         if (safeName.isBlank()) return ""
-        return runCatching { host?.readVariable(safeName).orEmpty() }.getOrDefault("")
+        return runCatching { host?.readVariable(safeName).orEmpty() }
+            .onFailure { throwable ->
+                AndroidAgentLogger.warnThrottled("character_html_get_var_failed") {
+                    "character html getVar failed: type=${throwable.safeLogType()}"
+                }
+            }
+            .getOrDefault("")
     }
 
     @JavascriptInterface
     fun setVar(name: String, value: String) {
-        val host = host ?: return
+        if (host == null) return
         val safeName = name.take(128)
         if (safeName.isBlank()) return
-        mainHandler.post { host.onAction(CharacterHtmlAction.SetVariable(safeName, value.take(4000))) }
+        val action = CharacterHtmlAction.SetVariable(safeName, value.take(4000))
+        mainHandler.post {
+            val activeHost = host ?: return@post
+            AndroidAgentLogger.info("character html action: setvar")
+            runCatching { activeHost.onAction(action) }.onFailure { throwable ->
+                AndroidAgentLogger.error(
+                    "character html action failed: setvar type=${throwable.safeLogType()}",
+                )
+            }
+        }
     }
 
     private fun parseAction(payload: String): CharacterHtmlAction? = runCatching {
@@ -325,3 +434,19 @@ private const val INTERACTION_SHIM = """
 })();
 </script>
 """
+
+// 首屏高度采样：连续两次稳定即发布；最多 14 次探测，之后放弃等待并使用当前值。
+private const val HEIGHT_FIRST_PROBE_DELAY_MS = 50L
+private const val HEIGHT_PROBE_INTERVAL_MS = 140L
+private const val HEIGHT_STABLE_DELTA_PX = 8
+private const val HEIGHT_STABLE_SAMPLES = 2
+private const val MAX_HEIGHT_PROBES = 14
+
+// 发布后仅复核两次明显变化，避免持续重排造成新的闪烁。
+private const val HEIGHT_RECHECK_FIRST_DELAY_MS = 1_300L
+private const val HEIGHT_RECHECK_SECOND_DELAY_MS = 2_800L
+private const val HEIGHT_RECHECK_DELTA_PX = 24
+
+// 页面回调缺失时的兜底显示时间与淡入时长。
+private const val HEIGHT_HARD_FALLBACK_MS = 2_400L
+private const val HEIGHT_FADE_IN_MS = 140L

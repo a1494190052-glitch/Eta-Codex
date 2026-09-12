@@ -280,6 +280,7 @@ internal fun ChatMessageItem(
             isEditing = isEditing,
             onEdit = { onEditMessage(message.id) },
             onDelete = { onDeleteMessage(message.id) },
+            characterHtmlHost = characterHtmlHost,
             modifier = modifier,
         )
         is AgentMessageUi -> AgentMessageBlock(
@@ -509,6 +510,7 @@ private fun UserMessageBubble(
     isEditing: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    characterHtmlHost: CharacterHtmlHost? = null,
     modifier: Modifier = Modifier,
 ) {
     @Suppress("DEPRECATION")
@@ -517,8 +519,12 @@ private fun UserMessageBubble(
     LaunchedEffect(actionsEnabled) {
         if (!actionsEnabled) tooltipState.dismiss()
     }
-    val visiblePrompt = remember(message.content) {
-        AgentFileReferencePromptCodec.parse(message.content)
+    // 显示侧正则（placement=1）：用户消息同样可能被卡脚本美化。
+    val displaySource = remember(message.content, characterHtmlHost) {
+        characterHtmlHost?.transformUser(message.content) ?: message.content
+    }
+    val visiblePrompt = remember(displaySource) {
+        AgentFileReferencePromptCodec.parse(displaySource)
     }
 
     Row(
@@ -787,8 +793,12 @@ private fun AgentMessageBlock(
             }
             message.renderMarkdown -> {
                 val htmlHost = characterHtmlHost
-                val htmlSegments = remember(message.content, htmlHost) {
-                    if (htmlHost == null) null else CharacterHtmlSegments.split(message.content)
+                // 显示侧正则：开场界面、战斗面板等由卡的正则（markdownOnly）在展示前替换生成。
+                val displayContent = remember(message.content, htmlHost) {
+                    htmlHost?.transformAssistant(message.content) ?: message.content
+                }
+                val htmlSegments = remember(displayContent, htmlHost) {
+                    if (htmlHost == null) null else CharacterHtmlSegments.split(displayContent)
                 }
                 val hasHtmlSegment = htmlSegments?.any { it is CharacterMessageSegment.Html } == true
                 if (htmlHost != null && hasHtmlSegment && htmlSegments != null) {
@@ -831,8 +841,8 @@ private fun AgentMessageBlock(
                 } else {
                     SelectionContainer {
                         StableMarkdown(
-                            content = message.content,
-                            parsedState = completedMarkdownState,
+                            content = displayContent,
+                            parsedState = if (displayContent == message.content) completedMarkdownState else null,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

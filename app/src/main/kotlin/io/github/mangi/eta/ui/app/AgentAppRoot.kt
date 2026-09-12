@@ -39,6 +39,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.mangi.eta.EtaApp
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.roleplay.CharacterCardCodec
+import io.github.mangi.eta.agent.roleplay.CharacterRegexScripts
 import io.github.mangi.eta.agent.device.BoundedRootCommandExecutor
 import io.github.mangi.eta.agent.device.DeviceLocationProvider
 import io.github.mangi.eta.agent.device.RootAccess
@@ -287,10 +289,22 @@ fun AgentAppRoot(
         LocalAppearanceSettings.current.swipeDismissEnabled
     }
     val appearanceSettings = LocalAppearanceSettings.current
+    // 角色卡"显示侧正则"（markdownOnly 等）：开场界面、战斗面板依赖它们在展示前替换。
+    val roleplayCardSnapshot = agentState.homeState.roleplay?.cardSnapshotJson
+    val characterDisplayScripts = remember(roleplayCardSnapshot) {
+        if (roleplayCardSnapshot.isNullOrBlank()) {
+            emptyList()
+        } else {
+            runCatching {
+                CharacterRegexScripts.parse(CharacterCardCodec.decodeJson(roleplayCardSnapshot))
+            }.getOrDefault(emptyList())
+        }
+    }
     // 角色卡"人机交互界面"的沙盒宿主：随设置开关重建，动作全部为白名单能力。
     val characterHtmlHost = remember(
         appearanceSettings.characterHtmlEnabled,
         appearanceSettings.characterHtmlScriptsEnabled,
+        characterDisplayScripts,
         agentState,
     ) {
         if (!appearanceSettings.characterHtmlEnabled) {
@@ -310,6 +324,7 @@ fun AgentAppRoot(
                     }
                 },
                 readVariable = { name -> agentState.characterVariableGet(name) },
+                displayScripts = characterDisplayScripts,
             )
         }
     }

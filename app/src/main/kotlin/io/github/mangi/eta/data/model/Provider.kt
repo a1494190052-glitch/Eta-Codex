@@ -17,6 +17,8 @@ internal object OpenAiEndpointMode {
 internal object ProviderSourceTypes {
     const val CUSTOM = "custom"
     const val OPENAI = "openai"
+    /** ChatGPT subscription authentication against the official Codex endpoint. */
+    const val CODEX = "codex"
     const val ANTHROPIC = "anthropic"
     const val BAILIAN = "bailian"
     const val DEEPSEEK = "deepseek"
@@ -27,6 +29,14 @@ internal object ProviderSourceTypes {
     const val SILICONFLOW = "siliconflow"
     const val OPENROUTER = "openrouter"
 }
+
+internal object CodexSubscription {
+    const val BASE_URL = "https://chatgpt.com/backend-api/codex"
+}
+
+internal val ProviderSetting.isCodexSubscription: Boolean
+    get() = sourceType == ProviderSourceTypes.CODEX ||
+        baseUrl.trim().trimEnd('/') == CodexSubscription.BASE_URL
 
 @Serializable
 sealed interface ProviderSetting {
@@ -118,7 +128,9 @@ internal val ProviderSetting.runtimeProviderType: String
     }
 
 internal val ProviderSetting.typeLabel: String
-    get() = when (this) {
+    get() = if (isCodexSubscription) {
+        "ChatGPT Codex 订阅"
+    } else when (this) {
         is AnthropicProviderSetting -> "Anthropic Messages"
         is OpenAiCompatibleProviderSetting -> "OpenAI-compatible"
         is CustomProviderSetting -> "Custom OpenAI-compatible"

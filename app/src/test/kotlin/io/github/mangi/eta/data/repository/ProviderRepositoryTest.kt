@@ -5,7 +5,10 @@ import io.github.mangi.eta.data.datastore.SettingsDataStore
 import io.github.mangi.eta.data.db.EtaDatabase
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
 import io.github.mangi.eta.data.model.CustomHeader
+import io.github.mangi.eta.data.model.Model
 import io.github.mangi.eta.data.model.OpenAiCompatibleProviderSetting
+import io.github.mangi.eta.data.model.OpenAiEndpointMode
+import io.github.mangi.eta.data.model.ProviderSourceTypes
 import io.github.mangi.eta.data.model.ModelSource
 import io.github.mangi.eta.data.model.ProviderSetting
 import io.github.mangi.eta.data.model.ReasoningEffort
@@ -44,6 +47,11 @@ class ProviderRepositoryTest {
         val providers = ProviderRepository.allProviders().associateBy { it.id }
 
         assertTrue(providers.getValue(BuiltinProviders.ANTHROPIC_ID) is AnthropicProviderSetting)
+        assertEquals(
+            "codex",
+            providers.getValue(BuiltinProviders.CODEX_ID).sourceType,
+        )
+        assertTrue(providers.getValue(BuiltinProviders.CODEX_ID).models.isEmpty())
         assertEquals(
             listOf("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"),
             providers.getValue(BuiltinProviders.OPENAI_ID).models.map { it.modelId },
@@ -131,6 +139,32 @@ class ProviderRepositoryTest {
         requireNotNull(config)
         assertEquals(provider.id, config.providerId)
         assertEquals("sk-test-key", config.apiKey)
+    }
+
+    @Test
+    fun codexRuntimeConfigNeverCopiesProviderApiKeyIntoIpcConfig() = runBlocking {
+        ProviderRepository.ensureBuiltInsMerged()
+        val model = Model(
+            id = "codex-model",
+            modelId = "codex-test-model",
+            displayName = "Codex Test",
+            toolCall = true,
+        )
+        val provider = (ProviderRepository.providerById(BuiltinProviders.CODEX_ID)
+            as OpenAiCompatibleProviderSetting)
+            .copy(
+                apiKey = "must-not-leave-the-app-process",
+                models = listOf(model),
+                endpointMode = OpenAiEndpointMode.CHAT_COMPLETIONS,
+                hostedWebSearchEnabled = true,
+            )
+
+        val config = RuntimeConfigRepository.buildRuntimeConfig(provider, model)
+
+        assertEquals(ProviderSourceTypes.CODEX, config.providerSourceType)
+        assertEquals("", config.apiKey)
+        assertEquals(OpenAiEndpointMode.RESPONSES, config.openAiEndpointMode)
+        assertEquals(false, config.hostedWebSearchEnabled)
     }
 
     @Test

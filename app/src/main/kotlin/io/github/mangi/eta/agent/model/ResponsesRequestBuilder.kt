@@ -10,7 +10,11 @@ internal object ResponsesRequestBuilder {
         tools: JSONArray,
     ): JSONObject {
         val input = buildInput(messages)
-        val responseTools = buildTools(tools, config.hostedWebSearchEnabled)
+        val responseTools = buildTools(
+            tools = tools,
+            hostedWebSearchEnabled = config.hostedWebSearchEnabled &&
+                !CodexRequestAuthenticator.isCodexSubscription(config),
+        )
         val instructions = OpenAiRequestMessages.responsesInstructions(messages)
             .ifBlank { config.systemPrompt }
         val request = JSONObject()
@@ -33,6 +37,14 @@ internal object ResponsesRequestBuilder {
         request.remove("previous_response_id")
         request.remove("reasoning")
         ProviderReasoning.applyResponsesRequest(request, config)
+        // Codex returns opaque reasoning items. Retain their encrypted continuation data within
+        // this in-memory Agent run so a following function_call_output can continue correctly.
+        if (
+            CodexRequestAuthenticator.isCodexSubscription(config) &&
+                config.reasoningCapabilities != null
+        ) {
+            request.put("include", JSONArray().put("reasoning.encrypted_content"))
+        }
         return request
     }
 

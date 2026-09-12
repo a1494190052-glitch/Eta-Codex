@@ -19,6 +19,8 @@ internal object ReasoningCapabilityResolver {
         ReasoningEffort.MEDIUM,
         ReasoningEffort.HIGH,
         ReasoningEffort.XHIGH,
+        // GPT-5.6 系列起官方新增 max 档（最长内部思考时间）。
+        ReasoningEffort.MAX,
     )
 
     fun resolve(
@@ -45,8 +47,13 @@ internal object ReasoningCapabilityResolver {
     ): ModelReasoningCapabilities? {
         val model = modelId.trim().lowercase()
         return when (sourceType) {
-            ProviderSourceTypes.OPENAI -> when {
-                model == "gpt-5.5" || model.startsWith("gpt-5.6-") ->
+            ProviderSourceTypes.OPENAI,
+            ProviderSourceTypes.CODEX -> when {
+                model == "gpt-5.5" ||
+                    model.startsWith("gpt-5.6-") ||
+                    model.startsWith("gpt-5") ||
+                    model.startsWith("gpt-6") ||
+                    model.contains("codex") ->
                     capabilities(
                         openAiEfforts,
                         canDisable = true,

@@ -1,6 +1,7 @@
 package io.github.mangi.eta.data.provider
 
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
+import io.github.mangi.eta.data.model.CodexSubscription
 import io.github.mangi.eta.data.model.OpenAiCompatibleProviderSetting
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import io.github.mangi.eta.data.model.ProviderSourceTypes
@@ -26,6 +27,11 @@ class BuiltinProvidersTest {
         assertEquals(0, providers.getValue(BuiltinProviders.MINIMAX_ID).models.size)
         assertEquals(0, providers.getValue(BuiltinProviders.STEPFUN_ID).models.size)
         assertEquals("https://api.moonshot.cn/v1", providers.getValue(BuiltinProviders.KIMI_ID).baseUrl)
+        val codex = providers.getValue(BuiltinProviders.CODEX_ID) as OpenAiCompatibleProviderSetting
+        assertEquals(CodexSubscription.BASE_URL, codex.baseUrl)
+        assertEquals(ProviderSourceTypes.CODEX, codex.sourceType)
+        assertEquals(OpenAiEndpointMode.RESPONSES, codex.endpointMode)
+        assertEquals("", codex.apiKey)
         assertEquals(ProviderSourceTypes.BAILIAN, providers.getValue(BuiltinProviders.BAILIAN_ID).sourceType)
         assertEquals(ProviderSourceTypes.MOONSHOT, providers.getValue(BuiltinProviders.KIMI_ID).sourceType)
         assertEquals(ProviderSourceTypes.MIMO, providers.getValue(BuiltinProviders.MIMO_ID).sourceType)

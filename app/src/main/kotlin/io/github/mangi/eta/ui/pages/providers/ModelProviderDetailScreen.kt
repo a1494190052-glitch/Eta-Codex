@@ -2,6 +2,8 @@
 
 package io.github.mangi.eta.ui.pages.providers
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,11 +43,15 @@ import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.EtaApp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
+import io.github.mangi.eta.data.model.CodexSubscription
 import io.github.mangi.eta.data.model.CustomProviderSetting
 import io.github.mangi.eta.data.model.OpenAiCompatibleProviderSetting
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import io.github.mangi.eta.data.model.ProviderSetting
+import io.github.mangi.eta.data.model.isCodexSubscription
 import io.github.mangi.eta.data.model.withId
+import io.github.mangi.eta.data.repository.CodexAuthRepository
+import io.github.mangi.eta.data.repository.ModelRepository
 import io.github.mangi.eta.data.repository.ProviderRepository
 import io.github.mangi.eta.data.repository.RemoteModelFetcher
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
@@ -59,6 +65,7 @@ import io.github.mangi.eta.ui.layout.horizontalCutoutPadding
 import io.github.mangi.eta.ui.navigation.NewProviderType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -283,51 +290,58 @@ private fun ProviderConfigTab(
     ) {
         item(key = "connection") {
             ProviderSection(title = stringResource(R.string.ui_connection_configuration_7d057b)) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    TextField(
-                        value = draft.name,
-                        onValueChange = { onDraftChange(draft.copy(name = it)) },
-                        label = stringResource(R.string.ui_name_1be7ae),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                if (provider.isCodexSubscription) {
+                    CodexSubscriptionControls(
+                        provider = provider,
+                        scope = scope,
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextField(
-                        value = draft.baseUrl,
-                        onValueChange = { onDraftChange(draft.copy(baseUrl = it)) },
-                        label = "Base URL",
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextField(
-                        value = draft.apiKey,
-                        onValueChange = { onDraftChange(draft.copy(apiKey = it)) },
-                        label = "API Key",
-                        singleLine = true,
-                        visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
-                                Icon(
-                                    imageVector = if (apiKeyVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
-                                    contentDescription = if (apiKeyVisible) context.getString(R.string.page_hide_bb0e7e) else context.getString(R.string.page_show_71b677),
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (provider is AnthropicProviderSetting) {
-                        Spacer(modifier = Modifier.height(12.dp))
+                } else {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         TextField(
-                            value = draft.anthropicVersion,
-                            onValueChange = { onDraftChange(draft.copy(anthropicVersion = it)) },
-                            label = "anthropic-version",
+                            value = draft.name,
+                            onValueChange = { onDraftChange(draft.copy(name = it)) },
+                            label = stringResource(R.string.ui_name_1be7ae),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextField(
+                            value = draft.baseUrl,
+                            onValueChange = { onDraftChange(draft.copy(baseUrl = it)) },
+                            label = "Base URL",
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextField(
+                            value = draft.apiKey,
+                            onValueChange = { onDraftChange(draft.copy(apiKey = it)) },
+                            label = "API Key",
+                            singleLine = true,
+                            visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                    Icon(
+                                        imageVector = if (apiKeyVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+                                        contentDescription = if (apiKeyVisible) context.getString(R.string.page_hide_bb0e7e) else context.getString(R.string.page_show_71b677),
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (provider is AnthropicProviderSetting) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            TextField(
+                                value = draft.anthropicVersion,
+                                onValueChange = { onDraftChange(draft.copy(anthropicVersion = it)) },
+                                label = "anthropic-version",
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
-                if (provider !is AnthropicProviderSetting) {
+                if (!provider.isCodexSubscription && provider !is AnthropicProviderSetting) {
                     HorizontalDivider()
                     WindowSpinnerPreference(
                         items = listOf(
@@ -635,6 +649,141 @@ private fun ProviderConfigTab(
     }
 }
 
+@Composable
+private fun CodexSubscriptionControls(
+    provider: ProviderSetting,
+    scope: CoroutineScope,
+) {
+    val context = LocalContext.current
+    var accountSummary by remember(provider.id) {
+        mutableStateOf(CodexAuthRepository.accountSummary(provider.id))
+    }
+    var deviceCode by remember(provider.id) { mutableStateOf<String?>(null) }
+    var signInJob by remember(provider.id) { mutableStateOf<Job?>(null) }
+    var isSigningIn by remember(provider.id) { mutableStateOf(false) }
+    var status by remember(provider.id) { mutableStateOf<String?>(null) }
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "通过 ChatGPT 订阅登录官方 Codex。不会要求或保存 API Key。",
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        BasicComponent(
+            title = if (isSigningIn) "正在等待浏览器授权…" else "登录 ChatGPT / Codex",
+            summary = when {
+                isSigningIn -> "请在浏览器页面输入显示的设备授权码。"
+                accountSummary == null -> "尚未登录"
+                else -> listOfNotNull(accountSummary?.email, accountSummary?.planType)
+                    .joinToString(" · ")
+                    .ifBlank { "已登录" }
+            },
+            enabled = !isSigningIn,
+            onClick = {
+                signInJob = scope.launch {
+                    isSigningIn = true
+                    status = "正在请求设备授权码…"
+                    var signedIn = false
+                    try {
+                        CodexAuthRepository.signIn(provider.id) { code ->
+                            deviceCode = code.userCode
+                            openCodexVerificationPage(context, code.verificationUrl)
+                        }
+                        signedIn = true
+                        deviceCode = null
+                        accountSummary = CodexAuthRepository.accountSummary(provider.id)
+                        status = "登录成功，正在同步可用模型…"
+                        val models = RemoteModelFetcher.fetch(provider).getOrThrow()
+                            .filter(RemoteModelFetcher::isChatCapableModel)
+                        val sync = ModelRepository.syncRemoteModels(provider.id, models)
+                        if (sync.applied) {
+                            RuntimeConfigRepository.setSelectedProviderId(provider.id)
+                            RuntimeConfigRepository.syncToRemotePreferences(EtaApp.serviceInstance)
+                            status = "登录成功，已同步 ${models.size} 个可用 Agent 模型。"
+                        } else {
+                            status = "登录成功，但未获取到可用 Agent 模型；请在“模型”页重新拉取。"
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (throwable: Throwable) {
+                        val detail = throwable.message ?: throwable.javaClass.simpleName
+                        status = if (signedIn) {
+                            "登录成功，但同步模型失败：$detail"
+                        } else {
+                            "登录失败：$detail"
+                        }
+                    } finally {
+                        deviceCode = null
+                        isSigningIn = false
+                        signInJob = null
+                    }
+                }
+            },
+        )
+        if (accountSummary != null) {
+            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+            BasicComponent(
+                title = "退出 ChatGPT / Codex",
+                summary = "删除本机 Keystore 中保存的 Codex 凭据。",
+                enabled = !isSigningIn,
+                onClick = {
+                    CodexAuthRepository.signOut(provider.id)
+                    accountSummary = null
+                    status = "已退出登录"
+                },
+            )
+        }
+        status?.let { message ->
+            Text(
+                text = message,
+                style = MiuixTheme.textStyles.footnote2,
+                color = if (
+                    message.startsWith("登录失败") || message.startsWith("登录成功，但同步模型失败")
+                ) {
+                    StatusError
+                } else {
+                    StatusSuccess
+                },
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+    }
+
+    deviceCode?.let { code ->
+        OverlayDialog(
+            show = true,
+            title = "在浏览器中完成 ChatGPT 登录",
+            summary = "请打开 ${CodexAuthRepository.DEVICE_VERIFICATION_URL}，输入设备授权码：\n\n$code",
+            onDismissRequest = {
+                signInJob?.cancel()
+                deviceCode = null
+            },
+        ) {
+            MiuixDialogActions(
+                confirmText = "重新打开登录页",
+                cancelText = "取消登录",
+                onCancel = {
+                    signInJob?.cancel()
+                    deviceCode = null
+                },
+                onConfirm = {
+                    openCodexVerificationPage(context, CodexAuthRepository.DEVICE_VERIFICATION_URL)
+                },
+            )
+        }
+    }
+}
+
+private fun openCodexVerificationPage(context: android.content.Context, verificationUrl: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(verificationUrl))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+}
+
 private fun buildUpdatedProvider(
     source: ProviderSetting,
     name: String,
@@ -647,24 +796,32 @@ private fun buildUpdatedProvider(
     anthropicVersion: String,
 ): ProviderSetting {
     val prompt = systemPrompt.trim().takeIf { it.isNotBlank() }
+    val isCodexSubscription = source.isCodexSubscription
+    val resolvedBaseUrl = if (isCodexSubscription) CodexSubscription.BASE_URL else baseUrl.trim()
+    val resolvedApiKey = if (isCodexSubscription) "" else apiKey.trim()
+    val resolvedEndpointMode = if (isCodexSubscription) {
+        OpenAiEndpointMode.RESPONSES
+    } else {
+        endpointMode
+    }
     return when (source) {
         is OpenAiCompatibleProviderSetting -> source.copy(
             name = name.trim(),
-            baseUrl = baseUrl.trim(),
-            apiKey = apiKey.trim(),
+            baseUrl = resolvedBaseUrl,
+            apiKey = resolvedApiKey,
             systemPrompt = prompt,
             isEnabled = isEnabled,
-            endpointMode = endpointMode,
-            hostedWebSearchEnabled = hostedWebSearchEnabled,
+            endpointMode = resolvedEndpointMode,
+            hostedWebSearchEnabled = hostedWebSearchEnabled && !isCodexSubscription,
         )
         is CustomProviderSetting -> source.copy(
             name = name.trim(),
-            baseUrl = baseUrl.trim(),
-            apiKey = apiKey.trim(),
+            baseUrl = resolvedBaseUrl,
+            apiKey = resolvedApiKey,
             systemPrompt = prompt,
             isEnabled = isEnabled,
-            endpointMode = endpointMode,
-            hostedWebSearchEnabled = hostedWebSearchEnabled,
+            endpointMode = resolvedEndpointMode,
+            hostedWebSearchEnabled = hostedWebSearchEnabled && !isCodexSubscription,
         )
         is AnthropicProviderSetting -> source.copy(
             name = name.trim(),

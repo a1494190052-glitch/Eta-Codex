@@ -1,0 +1,123 @@
+# GitHub Actions CI build for the Eta × Codex integration fork.
+#
+# Builds the signed release APK only. Toolchain mirrors Eta:
+#   - Gradle 9.6.1 (wrapper downloads it automatically)
+#   - JDK 25 (project java toolchain)
+#   - Android compileSdk 37, NDK 29.0.14206865
+#   - AGP 9.3.2 / Kotlin 2.4.10
+#
+# Release signing
+# ---------------
+# Eta's app/build.gradle.kts reads these environment variables:
+#   ETA_RELEASE_STORE_FILE / ETA_RELEASE_STORE_PASSWORD
+#   ETA_RELEASE_KEY_ALIAS  / ETA_RELEASE_KEY_PASSWORD
+#
+# Two supported paths:
+#   1. Provide a keystore via repository secrets (recommended for long-term use):
+#        RELEASE_KEYSTORE_BASE64  -> base64 of your .keystore/.jks file
+#        RELEASE_STORE_PASSWORD   -> keystore password
+#        RELEASE_KEY_ALIAS        -> key alias
+#        RELEASE_KEY_PASSWORD     -> key password
+#   2. Provide no secrets: the workflow generates a keystore with the
+#      documented default values below and uploads it as a run artifact so
+#      you can keep it. KEEP THAT KEYSTORE: future updates must be signed
+#      with the same key, otherwise Android requires uninstalling first.
+#
+# No personal access token is needed; GitHub injects GITHUB_TOKEN itself.
+
+name: Build Eta Codex fork
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # android-actions/setup-android 的 packages 输入只接受逗号分隔的单行字符串，
+      # 多行列表会被 sdkmanager 当成单个包名导致安装失败。Android 37 在 preview
+      # channel，因此按 Eta 上游 android-release.yml 的验证方式单独安装。
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ""
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Android SDK 37 and NDK
+        run: sdkmanager --channel=3 "platforms;android-37.0" "ndk;29.0.14206865"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare release keystore
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -eu
+          # 存到 RUNNER_TEMP：build.gradle.kts 里 storeFile = file(...) 相对 app/ 目录解析，
+          # 必须传绝对路径（与 Eta 上游 android-release.yml 一致）。
+          KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          if [ -n "${RELEASE_KEYSTORE_BASE64:-}" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            echo "GENERATED_KEYSTORE=false" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -alias "${RELEASE_KEY_ALIAS:-eta-codex}" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${RELEASE_STORE_PASSWORD:-eta-codex-release-2026}" \
+              -keypass "${RELEASE_KEY_PASSWORD:-eta-codex-release-2026}" \
+              -dname "CN=Eta Codex, OU=Personal, O=Personal, L=N/A, ST=N/A, C=CN"
+            echo "GENERATED_KEYSTORE=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release APK (R8 minified, signed)
+        env:
+          ETA_RELEASE_STORE_FILE: ${{ env.KEYSTORE_PATH }}
+          ETA_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD || 'eta-codex-release-2026' }}
+          ETA_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'eta-codex' }}
+          ETA_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'eta-codex-release-2026' }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Upload release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eta-codex-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload generated release keystore
+        if: success() && env.GENERATED_KEYSTORE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eta-codex-release-keystore
+          path: ${{ env.KEYSTORE_PATH }}
+          if-no-files-found: error

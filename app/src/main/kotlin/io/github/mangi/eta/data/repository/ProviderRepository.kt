@@ -14,6 +14,7 @@ import io.github.mangi.eta.data.model.OpenAiCompatibleProviderSetting
 import io.github.mangi.eta.data.model.ProviderSetting
 import io.github.mangi.eta.data.model.Settings
 import io.github.mangi.eta.data.model.selectedOrFirstModel
+import io.github.mangi.eta.data.model.isCodexSubscription
 import io.github.mangi.eta.data.model.withApiKey
 import io.github.mangi.eta.data.model.withModels
 import io.github.mangi.eta.data.model.withSortOrder
@@ -82,6 +83,9 @@ internal object ProviderRepository {
         val provider = providerById(id) ?: return
         if (provider.isBuiltIn) return
         dao().deleteProvider(id)
+        if (provider.isCodexSubscription) {
+            CodexAuthRepository.signOut(id)
+        }
         SettingsDataStore.clearSelectedModelIdForProvider(id)
         repairSelection()
     }

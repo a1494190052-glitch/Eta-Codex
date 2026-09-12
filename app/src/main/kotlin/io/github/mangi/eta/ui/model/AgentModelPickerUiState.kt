@@ -3,6 +3,7 @@ package io.github.mangi.eta.ui.model
 import androidx.compose.runtime.Immutable
 import io.github.mangi.eta.data.model.Model
 import io.github.mangi.eta.data.model.ProviderSetting
+import io.github.mangi.eta.data.model.isCodexSubscription
 import io.github.mangi.eta.data.provider.ProviderSourceRegistry
 import java.text.NumberFormat
 import java.util.Locale
@@ -67,7 +68,9 @@ internal object AgentModelPickerProjector {
                 .firstOrNull { it.id == selectedModelId }
         val groups = enabledProviders
             .asSequence()
-            .filter { it.apiKey.isNotBlank() }
+            // BYOK provider 必须已填写 API Key；ChatGPT Codex 订阅 provider 的凭据
+            // 单独保存在 Keystore，apiKey 恒为空字符串，不能按 BYOK 规则过滤掉。
+            .filter { provider -> provider.apiKey.isNotBlank() || provider.isCodexSubscription }
             .mapNotNull { provider ->
                 val sourceType = ProviderSourceRegistry.resolve(provider)
                 val models = provider.models

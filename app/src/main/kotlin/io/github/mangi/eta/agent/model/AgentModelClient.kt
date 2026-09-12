@@ -8,11 +8,13 @@ import io.github.mangi.eta.agent.skill.SkillContext
 import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.agent.tool.AgentToolCapabilities
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
+import io.github.mangi.eta.data.model.CodexSubscription
 import io.github.mangi.eta.data.model.CustomBody
 import io.github.mangi.eta.data.model.CustomHeader
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import io.github.mangi.eta.data.model.ModelReasoningCapabilities
 import io.github.mangi.eta.data.model.ProviderTypes
+import io.github.mangi.eta.data.model.ProviderSourceTypes
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.provider.BuiltinProviders
 import io.github.mangi.eta.data.provider.ProviderSourceRegistry
@@ -185,7 +187,19 @@ internal object AgentModelClient {
 
     private fun ModelConfig.validate() {
         require(baseUrl.isNotBlank()) { "请先配置 API 地址" }
-        require(apiKey.isNotBlank()) { "请先配置 API Key" }
+        val resolvedSourceType = ProviderSourceRegistry.resolve(
+            providerId = providerId,
+            sourceType = providerSourceType,
+            baseUrl = baseUrl,
+            providerType = providerType,
+        )
+        if (resolvedSourceType == ProviderSourceTypes.CODEX) {
+            require(baseUrl.trim().trimEnd('/') == CodexSubscription.BASE_URL) {
+                "ChatGPT 订阅只能使用官方 Codex 地址"
+            }
+        } else {
+            require(apiKey.isNotBlank()) { "请先配置 API Key" }
+        }
         require(model.isNotBlank()) { "请先配置模型名" }
         require(
             reasoningCapabilities?.mandatory != true ||

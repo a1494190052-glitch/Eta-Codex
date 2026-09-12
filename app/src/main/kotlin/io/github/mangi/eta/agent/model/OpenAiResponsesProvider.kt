@@ -3,10 +3,13 @@ package io.github.mangi.eta.agent.model
 import io.github.mangi.eta.agent.runtime.AgentRunController
 import io.github.mangi.eta.agent.runtime.AgentTokenUsage
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
+import io.github.mangi.eta.data.repository.CodexAuthRepository
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,44 +36,61 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         onEvent: (ProviderEvent) -> Unit,
     ): ProviderResponse {
         val config = request.config
-        require(config.openAiEndpointMode == OpenAiEndpointMode.RESPONSES) {
+        val usingCodexSubscription = CodexRequestAuthenticator.isCodexSubscription(config)
+        require(
+            config.openAiEndpointMode == OpenAiEndpointMode.RESPONSES || usingCodexSubscription
+        ) {
             "当前 Provider 未配置为 Responses API"
         }
         val body = buildRequestJson(config, request.messages, request.tools)
             .toString()
             .toRequestBody(JSON_MEDIA_TYPE)
-        val headers = okhttp3.Headers.Builder()
-            .add("Content-Type", "application/json; charset=utf-8")
-            .add("Accept", "text/event-stream")
-            .apply {
-                if (config.apiKey.isNotBlank()) add("Authorization", "Bearer ${config.apiKey}")
-            }
-            .also { CustomHeaderFilter.mergeInto(it, config.customHeaders) }
-            .build()
-        val httpRequest = Request.Builder()
-            .url(ProviderUrls.openAiResponsesUrl(config.baseUrl))
-            .headers(headers)
-            .post(body)
-            .build()
-        val call = AgentHttpClient.modelClient.newCall(httpRequest)
-        val binding = runController.register(call::cancel)
 
+        fun newCall(forceCodexRefresh: Boolean): Call {
+            val headers = buildHeaders(
+                config = config,
+                forceCodexRefresh = forceCodexRefresh,
+            )
+            val httpRequest = Request.Builder()
+                .url(ProviderUrls.openAiResponsesUrl(config.baseUrl))
+                .headers(headers)
+                .post(body)
+                .build()
+            return AgentHttpClient.modelClient.newCall(httpRequest)
+        }
+
+        fun decodeSuccessfulResponse(response: Response): ProviderResponse {
+            if (!response.isSuccessful) {
+                throw AgentModelFailure.http(response.code, response.peekBody(16_384).string())
+            }
+            val assistant = readStreamingResponse(
+                stream = response.body.byteStream(),
+                runController = runController,
+                onEvent = onEvent,
+            )
+            onEvent(ProviderEvent.Completed(assistant.optString("finish_reason").ifBlank { null }))
+            return ProviderResponse(assistant)
+        }
+
+        var call = newCall(forceCodexRefresh = false)
+        val binding = runController.register { call.cancel() }
         try {
             runController.throwIfCancelled()
             onEvent(ProviderEvent.RequestStarted)
             call.execute().use { response ->
-                onEvent(ProviderEvent.ResponseHeaders(response.code))
                 runController.throwIfCancelled()
-                if (!response.isSuccessful) {
-                    throw AgentModelFailure.http(response.code, response.peekBody(16_384).string())
+                // A token can be revoked before its advertised expiry. Refresh once in-process;
+                // neither refresh token nor replacement access token crosses the Agent IPC wire.
+                if (usingCodexSubscription && response.code == 401) {
+                    call = newCall(forceCodexRefresh = true)
+                    call.execute().use { retried ->
+                        onEvent(ProviderEvent.ResponseHeaders(retried.code))
+                        runController.throwIfCancelled()
+                        return decodeSuccessfulResponse(retried)
+                    }
                 }
-                val assistant = readStreamingResponse(
-                    stream = response.body.byteStream(),
-                    runController = runController,
-                    onEvent = onEvent,
-                )
-                onEvent(ProviderEvent.Completed(assistant.optString("finish_reason").ifBlank { null }))
-                return ProviderResponse(assistant)
+                onEvent(ProviderEvent.ResponseHeaders(response.code))
+                return decodeSuccessfulResponse(response)
             }
         } catch (throwable: Throwable) {
             runCatching { runController.throwIfCancelled() }
@@ -79,6 +99,35 @@ internal object OpenAiResponsesProvider : AgentProviderClient {
         } finally {
             binding.close()
         }
+    }
+
+    private fun buildHeaders(
+        config: AgentModelClient.ModelConfig,
+        forceCodexRefresh: Boolean,
+    ): okhttp3.Headers {
+        val headers = okhttp3.Headers.Builder()
+            .add("Content-Type", "application/json; charset=utf-8")
+            .add("Accept", "text/event-stream")
+        // User-provided headers may still add provider-specific non-sensitive metadata, but the
+        // Codex account and originator values below are final and cannot be overridden.
+        CustomHeaderFilter.mergeInto(headers, config.customHeaders)
+        if (CodexRequestAuthenticator.isCodexSubscription(config)) {
+            headers.removeAll("Content-Type")
+            headers.removeAll("Accept")
+            headers.add("Content-Type", "application/json; charset=utf-8")
+            headers.add("Accept", "text/event-stream")
+            CodexRequestAuthenticator.apply(
+                headers = headers,
+                baseUrl = config.baseUrl,
+                credentials = CodexAuthRepository.credentials(
+                    providerId = config.providerId,
+                    forceRefresh = forceCodexRefresh,
+                ),
+            )
+        } else if (config.apiKey.isNotBlank()) {
+            headers.add("Authorization", "Bearer ${config.apiKey}")
+        }
+        return headers.build()
     }
 
     internal fun buildRequestJson(

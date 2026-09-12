@@ -34,7 +34,8 @@ internal object ProviderReasoning {
             ProviderSourceTypes.MINIMAX -> unsupportedEffort("MiniMax", effort)
             ProviderSourceTypes.OPENROUTER -> applyOpenRouter(request, effort)
             ProviderSourceTypes.STEPFUN -> applyStepFun(request, effort)
-            ProviderSourceTypes.OPENAI -> applyOpenAi(request, effort)
+            ProviderSourceTypes.OPENAI,
+            ProviderSourceTypes.CODEX -> applyOpenAi(request, effort)
             ProviderSourceTypes.CUSTOM -> applyNamedReasoningEffort(request, effort)
         }
     }
@@ -45,9 +46,6 @@ internal object ProviderReasoning {
     ) {
         if (config.reasoningCapabilities == null) return
         val effort = validatedEffort(config)
-        if (sourceType(config) == ProviderSourceTypes.OPENAI && effort == ReasoningEffort.MAX) {
-            unsupportedEffort("OpenAI", effort)
-        }
         request.put(
             "reasoning",
             JSONObject().apply {
@@ -273,7 +271,7 @@ internal object ProviderReasoning {
     }
 
     private fun applyOpenAi(request: JSONObject, effort: ReasoningEffort) {
-        if (effort == ReasoningEffort.MAX) unsupportedEffort("OpenAI", effort)
+        // GPT-5.6 系列起官方支持 max effort；max 同样以 reasoning_effort 透传。
         applyNamedReasoningEffort(request, effort)
     }
 
@@ -307,7 +305,8 @@ internal object ProviderReasoning {
     private fun isLegacyReasoningModel(sourceType: String, modelId: String): Boolean {
         val model = modelId.trim().lowercase()
         return when (sourceType) {
-            ProviderSourceTypes.OPENAI -> model.startsWith("gpt-5") || model.startsWith("o")
+            ProviderSourceTypes.OPENAI,
+            ProviderSourceTypes.CODEX -> model.startsWith("gpt-5") || model.startsWith("o")
             ProviderSourceTypes.ANTHROPIC -> model.startsWith("claude-")
             ProviderSourceTypes.BAILIAN ->
                 model.startsWith("qwen3.7-") ||

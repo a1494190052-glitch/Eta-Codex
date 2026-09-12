@@ -69,13 +69,16 @@ class ProviderReasoningTest {
     }
 
     @Test
-    fun openAiRejectsUnsupportedMaxEffort() {
-        assertThrows(IllegalArgumentException::class.java) {
-            ProviderReasoning.applyOpenAiCompatibleRequest(
-                JSONObject(),
-                config(source = ProviderSourceTypes.OPENAI, effort = ReasoningEffort.MAX),
-            )
-        }
+    fun openAiMaxUsesDocumentedMaxValue() {
+        val request = JSONObject()
+
+        ProviderReasoning.applyOpenAiCompatibleRequest(
+            request,
+            config(source = ProviderSourceTypes.OPENAI, effort = ReasoningEffort.MAX),
+        )
+
+        // GPT-5.6 系列起官方支持 max effort。
+        assertEquals("max", request.getString("reasoning_effort"))
     }
 
     @Test

@@ -1,5 +1,25 @@
 # Eta
 
+> ## ⚠️ 分支声明（Eta-Codex）
+>
+> 本仓库是 **Eta 的个人功能分支**，由 [Mangi-11/Eta](https://github.com/Mangi-11/Eta)（commit
+> `eb8802a3`）派生，额外集成了 **ChatGPT 订阅登录官方 Codex** 的能力：
+>
+> - ChatGPT/Codex 设备码登录、Token 自动刷新（Android Keystore AES-GCM 加密存储）
+> - 官方 Codex Responses 端点、流式输出与完整 Agent Tool Calling
+> - 功能说明见 [docs/CODEX_INTEGRATION.md](docs/CODEX_INTEGRATION.md)
+>
+> **许可证与出处：**
+> - 上游 Eta 采用 **PolyForm Noncommercial License 1.0.0**（见 [LICENSE](LICENSE)）：
+>   本分支同样**仅限非商业用途**，禁止商业使用与收费分发；
+> - Codex 设备登录与订阅鉴权流程适配自 [Ayuilos/Miffan](https://github.com/Ayuilos/Miffan)
+>   （commit `4fd12969`，AGPL-3.0），对应文件头部已标注出处，以 AGPL-3.0 提供；
+> - 使用本项目前请自行确认你拥有合规的 ChatGPT/Codex 订阅权限。
+>
+> 除以上差异外，其余内容与上游 Eta 一致，以下为上游原始说明。
+
+---
+
 **简体中文** | [English](README_EN.md)
 
 <p><a href="https://github.com/Mangi-11/Eta/releases"><img src="https://img.shields.io/github/downloads/Mangi-11/Eta/total?logo=github&amp;label=%E4%B8%8B%E8%BD%BD%E9%87%8F&amp;color=1677FF" alt="GitHub Releases 累计下载量"></a> <img src="https://img.shields.io/badge/minSdk-34-3DDC84?logo=android&amp;logoColor=white" alt="minSdk 34"> <img src="https://img.shields.io/badge/Kotlin-2.4.10-7F52FF?logo=kotlin&amp;logoColor=white" alt="Kotlin 2.4.10"> <img src="https://img.shields.io/badge/AGP-9.3.2-3DDC84?logo=android&amp;logoColor=white" alt="AGP 9.3.2"> <img src="https://img.shields.io/badge/Assistant%20Integrations-ColorOS%20%26%20HyperOS-1677FF" alt="Assistant integrations for ColorOS and HyperOS"></p>

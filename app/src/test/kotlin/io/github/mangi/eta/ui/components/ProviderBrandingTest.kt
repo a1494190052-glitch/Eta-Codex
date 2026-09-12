@@ -73,6 +73,10 @@ class ProviderBrandingTest {
             R.drawable.provider_logo_bailian,
             modelOrProviderBrandLogoRes("vendor/unknown-chat", ProviderSourceTypes.BAILIAN),
         )
+        assertEquals(
+            R.drawable.provider_logo_openai,
+            modelOrProviderBrandLogoRes("vendor/unknown-chat", ProviderSourceTypes.CODEX),
+        )
         assertNull(modelOrProviderBrandLogoRes("vendor/unknown-chat", ProviderSourceTypes.CUSTOM))
     }
 }

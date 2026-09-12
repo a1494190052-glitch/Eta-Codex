@@ -94,13 +94,24 @@ internal object RuntimeConfigRepository {
             ?.takeIf { it.isNotBlank() }
             ?: BuiltinProviders.DEFAULT_SYSTEM_PROMPT
         val sourceType = ProviderSourceRegistry.resolve(provider)
-        val endpointMode = when (provider) {
+        val configuredEndpointMode = when (provider) {
             is OpenAiCompatibleProviderSetting -> provider.endpointMode
             is CustomProviderSetting -> provider.endpointMode
             is AnthropicProviderSetting -> ""
         }
-        val inferOpenAiCatalog = sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CUSTOM &&
-            endpointMode == OpenAiEndpointMode.RESPONSES
+        // Subscription traffic uses only the official Responses endpoint; do not permit a stale
+        // stored provider record to route Codex credentials through Chat Completions.
+        val endpointMode = if (
+            sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CODEX
+        ) {
+            OpenAiEndpointMode.RESPONSES
+        } else {
+            configuredEndpointMode
+        }
+        val inferOpenAiCatalog =
+            sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CODEX ||
+                (sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CUSTOM &&
+                    endpointMode == OpenAiEndpointMode.RESPONSES)
         val reasoningCapabilities = ReasoningCapabilityResolver.resolve(
             sourceType = if (inferOpenAiCatalog) {
                 io.github.mangi.eta.data.model.ProviderSourceTypes.OPENAI
@@ -116,7 +127,11 @@ internal object RuntimeConfigRepository {
             providerType = provider.runtimeProviderType,
             providerSourceType = sourceType,
             baseUrl = provider.baseUrl.trim(),
-            apiKey = provider.apiKey.trim(),
+            apiKey = if (sourceType == io.github.mangi.eta.data.model.ProviderSourceTypes.CODEX) {
+                ""
+            } else {
+                provider.apiKey.trim()
+            },
             model = model.modelId.trim(),
             modelDisplayName = model.displayName.trim(),
             contextWindow = model.effectiveContextWindow,
@@ -124,7 +139,8 @@ internal object RuntimeConfigRepository {
             anthropicVersion = (provider as? AnthropicProviderSetting)?.anthropicVersion
                 ?: AnthropicProviderSetting.DEFAULT_ANTHROPIC_VERSION,
             openAiEndpointMode = endpointMode,
-            hostedWebSearchEnabled = provider.hostedWebSearchEnabled,
+            hostedWebSearchEnabled = provider.hostedWebSearchEnabled &&
+                sourceType != io.github.mangi.eta.data.model.ProviderSourceTypes.CODEX,
             thinkingEnabled = reasoningCapabilities != null,
             reasoningEffort = reasoningCapabilities?.let { ReasoningEffort.DEFAULT }
                 ?: ReasoningEffort.OFF,

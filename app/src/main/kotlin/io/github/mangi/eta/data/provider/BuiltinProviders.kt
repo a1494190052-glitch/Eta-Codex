@@ -1,6 +1,7 @@
 package io.github.mangi.eta.data.provider
 
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
+import io.github.mangi.eta.data.model.CodexSubscription
 import io.github.mangi.eta.data.model.OpenAiCompatibleProviderSetting
 import io.github.mangi.eta.data.model.OpenAiEndpointMode
 import io.github.mangi.eta.data.model.ProviderSetting
@@ -12,6 +13,7 @@ internal object BuiltinProviders {
             "回答使用用户的语言，简洁、直接、自然。"
 
     const val OPENAI_ID = "builtin-openai"
+    const val CODEX_ID = "builtin-codex-subscription"
     const val ANTHROPIC_ID = "builtin-anthropic"
     const val BAILIAN_ID = "builtin-dashscope"
     const val DEEPSEEK_ID = "builtin-deepseek"
@@ -113,6 +115,17 @@ internal object BuiltinProviders {
             isBuiltIn = true,
             sortOrder = 9,
             systemPrompt = DEFAULT_SYSTEM_PROMPT
+        ),
+        // Credentials are stored separately in Android Keystore, never in this Provider record.
+        OpenAiCompatibleProviderSetting(
+            id = CODEX_ID,
+            name = "ChatGPT Codex",
+            baseUrl = CodexSubscription.BASE_URL,
+            sourceType = ProviderSourceTypes.CODEX,
+            isBuiltIn = true,
+            sortOrder = 10,
+            systemPrompt = DEFAULT_SYSTEM_PROMPT,
+            endpointMode = OpenAiEndpointMode.RESPONSES,
         )
     )
 

@@ -1,6 +1,7 @@
 package io.github.mangi.eta.data.repository
 
 import io.github.mangi.eta.agent.model.AgentHttpClient
+import io.github.mangi.eta.agent.model.CodexRequestAuthenticator
 import io.github.mangi.eta.agent.model.CustomHeaderFilter
 import io.github.mangi.eta.agent.model.ProviderUrls
 import io.github.mangi.eta.data.model.AnthropicProviderSetting
@@ -8,8 +9,11 @@ import io.github.mangi.eta.data.model.Model
 import io.github.mangi.eta.data.model.ModelReasoningCapabilities
 import io.github.mangi.eta.data.model.ModelSource
 import io.github.mangi.eta.data.model.ProviderSetting
+import io.github.mangi.eta.data.model.ProviderSourceTypes
 import io.github.mangi.eta.data.model.ReasoningEffort
+import io.github.mangi.eta.data.model.isCodexSubscription
 import io.github.mangi.eta.data.provider.OfficialModelCatalog
+import io.github.mangi.eta.data.provider.ReasoningCapabilityResolver
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,6 +27,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
 internal object RemoteModelFetcher {
@@ -32,18 +37,20 @@ internal object RemoteModelFetcher {
     suspend fun fetch(provider: ProviderSetting): Result<List<Model>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                when (provider) {
-                    is AnthropicProviderSetting -> fetchAnthropic(provider)
+                when {
+                    provider.isCodexSubscription -> fetchCodex(provider)
+                    provider is AnthropicProviderSetting -> fetchAnthropic(provider)
                     else -> fetchOpenAiCompatible(provider)
                 }
             }
         }
 
     internal fun parseOpenAiModels(body: String): List<Model> {
-        val data = json.parseToJsonElement(body)
-            .jsonObjectOrNull()
-            ?.get("data")
-            ?.jsonArrayOrNull()
+        val root = json.parseToJsonElement(body).jsonObjectOrNull() ?: return emptyList()
+        // The Codex catalog uses `models` on some server revisions while standard OpenAI
+        // compatible endpoints use `data`; accept both without weakening normal parsing.
+        val data = root["data"]?.jsonArrayOrNull()
+            ?: root["models"]?.jsonArrayOrNull()
             ?: return emptyList()
         return data.mapNotNull { element ->
             element.jsonObjectOrNull()?.toModel(defaultOwnedBy = null)
@@ -59,6 +66,68 @@ internal object RemoteModelFetcher {
         return data.mapNotNull { element ->
             element.jsonObjectOrNull()?.toAnthropicModel()
         }
+    }
+
+    private fun fetchCodex(provider: ProviderSetting): List<Model> {
+        val url = ProviderUrls.openAiModelsUrl(provider.baseUrl)
+            .toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("client_version", CodexRequestAuthenticator.MODELS_CLIENT_VERSION)
+            .build()
+
+        fun buildRequest(forceRefresh: Boolean): Request {
+            val headers = okhttp3.Headers.Builder()
+                .add("Accept", "application/json")
+            CustomHeaderFilter.mergeInto(headers, provider.customHeaders)
+            headers.removeAll("Accept")
+            headers.add("Accept", "application/json")
+            CodexRequestAuthenticator.apply(
+                headers = headers,
+                baseUrl = provider.baseUrl,
+                credentials = CodexAuthRepository.credentials(
+                    providerId = provider.id,
+                    forceRefresh = forceRefresh,
+                ),
+            )
+            return Request.Builder()
+                .url(url)
+                .headers(headers.build())
+                .get()
+                .build()
+        }
+
+        fun execute(request: Request): Pair<Int, String> =
+            AgentHttpClient.client.newCall(request).execute().use { response ->
+                response.code to response.body.string()
+            }
+
+        var (code, body) = execute(buildRequest(forceRefresh = false))
+        if (code == 401) {
+            val retried = execute(buildRequest(forceRefresh = true))
+            code = retried.first
+            body = retried.second
+        }
+        if (code !in 200..299) {
+            error("拉取 Codex 模型失败 HTTP $code: ${body.compactError()}")
+        }
+        return OfficialModelCatalog.enrich(provider, parseOpenAiModels(body))
+            .map { it.withCodexReasoningFallback() }
+    }
+
+    /**
+     * Codex /models 通常不返回 reasoning 元数据，而 Eta 的思考强度档位完全由模型元数据
+     * 驱动。Codex 端点上的 GPT 系列模型都支持 OpenAI 推理协议，这里统一按家族补齐，
+     * 否则聊天页会出现"无法调节思考强度"。
+     */
+    private fun Model.withCodexReasoningFallback(): Model {
+        if (reasoning != null || reasoningCapabilities != null) return this
+        return copy(
+            reasoning = true,
+            reasoningCapabilities = ReasoningCapabilityResolver.catalogCapabilities(
+                ProviderSourceTypes.CODEX,
+                modelId,
+            ),
+        )
     }
 
     private fun fetchOpenAiCompatible(provider: ProviderSetting): List<Model> {
@@ -142,7 +211,8 @@ internal object RemoteModelFetcher {
     )
 
     private fun JsonObject.toModel(defaultOwnedBy: String?): Model? {
-        val modelId = string("id")?.trim().orEmpty()
+        if (boolean("supported_in_api") == false || string("visibility") == "hide") return null
+        val modelId = string("id", "slug", "model")?.trim().orEmpty()
         if (modelId.isBlank()) return null
         val architecture = this["architecture"]?.jsonObjectOrNull()
         val supportedParameters = stringList("supported_parameters", "supportedParameters").orEmpty()

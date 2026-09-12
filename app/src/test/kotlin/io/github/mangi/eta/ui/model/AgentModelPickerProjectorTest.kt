@@ -71,6 +71,32 @@ class AgentModelPickerProjectorTest {
     }
 
     @Test
+    fun project_showsCodexSubscriptionGroupWithoutApiKey() {
+        val codexModel = model(id = "codex-model", displayName = "Codex Model")
+        val result = AgentModelPickerProjector.project(
+            providers = listOf(
+                provider(
+                    id = "codex",
+                    sourceType = ProviderSourceTypes.CODEX,
+                    apiKey = "",
+                    models = listOf(codexModel),
+                ),
+                provider(
+                    id = "missing-key",
+                    apiKey = "",
+                    models = listOf(model(id = "other-model")),
+                ),
+            ),
+            selectedProviderId = "codex",
+            selectedModelId = codexModel.id,
+        )
+
+        // Codex 订阅 provider 无 API Key 也必须出现在选择器中；普通 BYOK provider 仍隐藏。
+        assertEquals(listOf("codex"), result.providerGroups.map { it.providerId })
+        assertEquals(codexModel.id, result.selectedModel?.id)
+    }
+
+    @Test
     fun providerGroups_expandCurrentByDefault() {
         val selected = AgentModelOptionUi(
             id = "model",

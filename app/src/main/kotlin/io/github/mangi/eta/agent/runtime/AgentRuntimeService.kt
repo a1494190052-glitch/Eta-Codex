@@ -46,6 +46,7 @@ import io.github.mangi.eta.config.Prefs
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.core.ModuleConfig
 import io.github.mangi.eta.core.safeLogType
+import io.github.mangi.eta.data.repository.CodexAuthRepository
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
@@ -104,6 +105,8 @@ internal class AgentRuntimeService : Service(), LifecycleOwner, SavedStateRegist
 
     override fun onCreate() {
         super.onCreate()
+        // Be defensive when the Runtime service is started before the main UI process has opened.
+        CodexAuthRepository.init(this)
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)

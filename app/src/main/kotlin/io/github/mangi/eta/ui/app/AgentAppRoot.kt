@@ -45,6 +45,7 @@ import io.github.mangi.eta.agent.device.BoundedRootCommandExecutor
 import io.github.mangi.eta.agent.device.DeviceLocationProvider
 import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.core.AndroidAgentLogger
+import io.github.mangi.eta.core.safeLogType
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
 import io.github.mangi.eta.ui.SettingsScreen
@@ -313,14 +314,21 @@ fun AgentAppRoot(
             CharacterHtmlHost(
                 scriptsEnabled = appearanceSettings.characterHtmlScriptsEnabled,
                 onAction = { action ->
-                    when (action) {
-                        is CharacterHtmlAction.SendText -> {
-                            requestExecutionNotifications()
-                            agentState.sendCurrentMessage(action.text)
+                    // 卡脚本触发的动作在异常时不能拖垮整个界面；记录后忽略本次动作。
+                    runCatching {
+                        when (action) {
+                            is CharacterHtmlAction.SendText -> {
+                                requestExecutionNotifications()
+                                agentState.sendCurrentMessage(action.text)
+                            }
+                            is CharacterHtmlAction.SetVariable ->
+                                agentState.characterVariableSet(action.name, action.value)
+                            CharacterHtmlAction.Regenerate -> Unit
                         }
-                        is CharacterHtmlAction.SetVariable ->
-                            agentState.characterVariableSet(action.name, action.value)
-                        CharacterHtmlAction.Regenerate -> Unit
+                    }.onFailure { throwable ->
+                        AndroidAgentLogger.error(
+                            "character html action failed: type=${throwable.safeLogType()}",
+                        )
                     }
                 },
                 readVariable = { name -> agentState.characterVariableGet(name) },

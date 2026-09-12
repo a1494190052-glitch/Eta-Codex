@@ -89,7 +89,7 @@ internal fun CharacterHtmlView(
     val bridgeEnabled = host?.scriptsEnabled == true
     val density = LocalDensity.current
     var heightPx by remember { mutableIntStateOf(0) }
-    var pageLoaded by remember { mutableStateOf(false) }
+    var measureSettled by remember { mutableStateOf(false) }
     val maxHeightPx = with(density) { 1400.dp.toPx().toInt() }
     val minHeightPx = with(density) { 24.dp.toPx().toInt() }
     // 页面已加载但测高失败（0）时给出兜底高度：宁可多占空间也避免"什么都看不到"。
@@ -113,7 +113,7 @@ internal fun CharacterHtmlView(
                         with(density) {
                             val effective = when {
                                 heightPx > 0 -> heightPx
-                                pageLoaded -> fallbackHeightPx
+                                measureSettled -> fallbackHeightPx
                                 else -> minHeightPx
                             }
                             effective.coerceAtLeast(minHeightPx).toDp()
@@ -142,16 +142,20 @@ internal fun CharacterHtmlView(
                         webViewClient = object : WebViewClient() {
                             private fun reportHeight(view: WebView) {
                                 val measured = view.contentHeight
-                                if (measured > 0) {
+                                if (measured <= 0) return
+                                // 高度防抖：测量窗口内的细小波动不触发重排，避免面板持续跳动。
+                                if (heightPx == 0 || kotlin.math.abs(measured - heightPx) > 12) {
                                     heightPx = measured.coerceAtMost(maxHeightPx)
                                 }
                             }
 
                             override fun onPageFinished(view: WebView, url: String?) {
-                                pageLoaded = true
                                 view.postDelayed({ reportHeight(view) }, 50)
                                 view.postDelayed({ reportHeight(view) }, 350)
-                                view.postDelayed({ reportHeight(view) }, 900)
+                                view.postDelayed {
+                                    reportHeight(view)
+                                    measureSettled = true
+                                }
                             }
 
                             override fun shouldOverrideUrlLoading(

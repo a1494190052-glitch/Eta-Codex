@@ -12,6 +12,12 @@
 #   public *;
 #}
 
+# WebView 的 EtaNative 白名单桥通过 JS 反射调用：保留注解方法名，
+# 避免 release 混淆后卡内交互静默失效（按钮点了没反应）。
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
 #-keepattributes SourceFile,LineNumberTable

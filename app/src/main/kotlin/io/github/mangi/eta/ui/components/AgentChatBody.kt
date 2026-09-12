@@ -377,6 +377,7 @@ private fun AgentChatScaffold(
                 messageActionsEnabled = !isStreaming && messageEdit == null,
                 editTargetMessageId = messageEdit?.targetMessageId,
                 currentBrowserMessageId = currentBrowserMessageId,
+                characterHtmlHost = characterHtmlHost,
                 modifier = Modifier
                     .fillMaxSize()
                     .then(if (frostEnabled) Modifier.layerBackdrop(messageBackdrop) else Modifier),
@@ -404,6 +405,7 @@ internal fun AgentConversationMessages(
     messageActionsEnabled: Boolean = false,
     editTargetMessageId: String? = null,
     currentBrowserMessageId: String? = null,
+    characterHtmlHost: CharacterHtmlHost? = null,
     modifier: Modifier = Modifier,
 ) {
     val timelineEntries = remember(visibleMessages) { visibleMessages.toTimelineEntries() }

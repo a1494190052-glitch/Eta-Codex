@@ -21,7 +21,7 @@ internal object CharacterCardCompatibility {
             add("含未支持的宏，已保留原文，不执行变量、条件或脚本操作。")
         }
         if (fields.any { html.containsMatchIn(it) }) {
-            add("含 HTML 或脚本界面标记，按文本保留，不运行交互界面。")
+            add("含 HTML 或脚本界面标记；聊天中在沙盒内按界面渲染（可在外观设置关闭），不运行任意脚本。")
         }
         val extensionKeys = mutableSetOf<String>()
         collectExtensionKeys(card.extensions, extensionKeys, 0)

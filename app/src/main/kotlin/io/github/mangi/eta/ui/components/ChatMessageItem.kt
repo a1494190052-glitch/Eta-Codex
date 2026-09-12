@@ -82,6 +82,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -141,6 +142,8 @@ import io.github.mangi.eta.agent.browser.AgentBrowserSession
 import io.github.mangi.eta.agent.browser.BrowserSessionSnapshot
 import io.github.mangi.eta.agent.model.AgentFileReferencePromptCodec
 import io.github.mangi.eta.agent.overlay.toolDisplayName
+import io.github.mangi.eta.agent.roleplay.CharacterHtmlSegments
+import io.github.mangi.eta.agent.roleplay.CharacterMessageSegment
 import io.github.mangi.eta.ui.model.AgentChatMessageUi
 import io.github.mangi.eta.ui.model.AgentMessageUi
 import io.github.mangi.eta.ui.model.RunTraceMessageUi
@@ -268,6 +271,7 @@ internal fun ChatMessageItem(
     onDeleteMessage: (String) -> Unit = {},
     onRegenerateMessage: (String) -> Unit = {},
     onSelectReplyCandidate: (String, Int) -> Unit = { _, _ -> },
+    characterHtmlHost: CharacterHtmlHost? = null,
 ) {
     when (message) {
         is UserMessageUi -> UserMessageBubble(
@@ -288,6 +292,7 @@ internal fun ChatMessageItem(
             onRegenerate = { onRegenerateMessage(message.id) },
             onEdit = { onEditMessage(message.id) },
             onSelectCandidate = { onSelectReplyCandidate(message.id, it) },
+            characterHtmlHost = characterHtmlHost,
             modifier = modifier,
         )
         is SystemNoticeMessageUi -> if (message.code == SystemNoticeCode.ContextCompaction) {
@@ -729,6 +734,7 @@ private fun AgentMessageBlock(
     onRegenerate: () -> Unit,
     onEdit: () -> Unit = {},
     onSelectCandidate: (Int) -> Unit = {},
+    characterHtmlHost: CharacterHtmlHost? = null,
     modifier: Modifier = Modifier,
 ) {
     @Suppress("DEPRECATION")
@@ -780,12 +786,56 @@ private fun AgentMessageBlock(
                 )
             }
             message.renderMarkdown -> {
-                SelectionContainer {
-                    StableMarkdown(
-                        content = message.content,
-                        parsedState = completedMarkdownState,
+                val htmlHost = characterHtmlHost
+                val htmlSegments = remember(message.content, htmlHost) {
+                    if (htmlHost == null) null else CharacterHtmlSegments.split(message.content)
+                }
+                val hasHtmlSegment = htmlSegments?.any { it is CharacterMessageSegment.Html } == true
+                if (htmlHost != null && hasHtmlSegment && htmlSegments != null) {
+                    val darkTheme = MiuixTheme.colorScheme.onSurface.luminance() > 0.5f
+                    val interactiveHost = remember(htmlHost, message.id) {
+                        htmlHost.copy(
+                            onAction = { action ->
+                                if (action is CharacterHtmlAction.Regenerate) {
+                                    onRegenerate()
+                                } else {
+                                    htmlHost.onAction(action)
+                                }
+                            },
+                        )
+                    }
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        htmlSegments.forEach { segment ->
+                            when (segment) {
+                                is CharacterMessageSegment.Html -> CharacterHtmlView(
+                                    html = segment.html,
+                                    host = interactiveHost,
+                                    isDark = darkTheme,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                is CharacterMessageSegment.Text -> if (segment.text.isNotBlank()) {
+                                    SelectionContainer {
+                                        StableMarkdown(
+                                            content = segment.text,
+                                            parsedState = null,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    SelectionContainer {
+                        StableMarkdown(
+                            content = message.content,
+                            parsedState = completedMarkdownState,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
             message.content.isNotBlank() -> {

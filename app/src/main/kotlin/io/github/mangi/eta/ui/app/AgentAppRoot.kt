@@ -46,6 +46,8 @@ import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import io.github.mangi.eta.ui.AppearanceSettingsScreen
 import io.github.mangi.eta.ui.SettingsScreen
+import io.github.mangi.eta.ui.components.CharacterHtmlAction
+import io.github.mangi.eta.ui.components.CharacterHtmlHost
 import io.github.mangi.eta.ui.components.MiuixDialogActions
 import io.github.mangi.eta.ui.model.AgentChatAction
 import io.github.mangi.eta.ui.model.AgentHomeAction
@@ -284,6 +286,33 @@ fun AgentAppRoot(
     val swipeDismiss = swipeBackDirection.takeIf {
         LocalAppearanceSettings.current.swipeDismissEnabled
     }
+    val appearanceSettings = LocalAppearanceSettings.current
+    // 角色卡"人机交互界面"的沙盒宿主：随设置开关重建，动作全部为白名单能力。
+    val characterHtmlHost = remember(
+        appearanceSettings.characterHtmlEnabled,
+        appearanceSettings.characterHtmlScriptsEnabled,
+        agentState,
+    ) {
+        if (!appearanceSettings.characterHtmlEnabled) {
+            null
+        } else {
+            CharacterHtmlHost(
+                scriptsEnabled = appearanceSettings.characterHtmlScriptsEnabled,
+                onAction = { action ->
+                    when (action) {
+                        is CharacterHtmlAction.SendText -> {
+                            requestExecutionNotifications()
+                            agentState.sendCurrentMessage(action.text)
+                        }
+                        is CharacterHtmlAction.SetVariable ->
+                            agentState.characterVariableSet(action.name, action.value)
+                        CharacterHtmlAction.Regenerate -> Unit
+                    }
+                },
+                readVariable = { name -> agentState.characterVariableGet(name) },
+            )
+        }
+    }
     key(navigationResetKey) {
         NavDisplay(
             backStack = backStack,
@@ -339,6 +368,7 @@ fun AgentAppRoot(
                             }
                         },
                         isDrawerOpen = conversationPaneOpen,
+                        characterHtmlHost = characterHtmlHost,
                     )
                 }
             }
@@ -383,6 +413,7 @@ fun AgentAppRoot(
                                 is AgentChatAction.SelectReplyCandidate -> agentState.selectReplyCandidate(action.id, action.index)
                             }
                         },
+                        characterHtmlHost = characterHtmlHost,
                     )
                 }
             }

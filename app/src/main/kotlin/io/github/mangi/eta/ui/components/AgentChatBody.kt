@@ -153,6 +153,7 @@ internal fun AgentChatBody(
     onRunTraceClick: () -> Unit,
     onOpenBrowser: () -> Unit,
     characterName: String? = null,
+    characterHtmlHost: CharacterHtmlHost? = null,
     isDrawerOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -647,6 +648,7 @@ internal fun AgentConversationMessages(
                             onDeleteMessage = onDeleteMessage,
                             onRegenerateMessage = onRegenerateMessage,
                             onSelectReplyCandidate = onSelectReplyCandidate,
+                            characterHtmlHost = characterHtmlHost,
                             modifier = itemModifier,
                         )
                     }

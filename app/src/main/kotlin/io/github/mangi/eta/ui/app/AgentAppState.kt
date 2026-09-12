@@ -31,6 +31,7 @@ import io.github.mangi.eta.agent.model.AgentModelClient
 import io.github.mangi.eta.agent.roleplay.RoleplayBinding
 import io.github.mangi.eta.agent.roleplay.CharacterMacros
 import io.github.mangi.eta.agent.roleplay.CharacterCardCodec
+import io.github.mangi.eta.agent.roleplay.CharacterSessionRegistry
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageLink
 import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
 import io.github.mangi.eta.data.repository.CharacterRepository
@@ -873,6 +874,19 @@ internal class AgentAppState(
         updateCurrentConversation(updated)
         refreshConversationSummaries()
         persistConversations()
+    }
+
+    /** 卡内脚本交互（受限通道）：读取当前角色会话的宏变量。 */
+    fun characterVariableGet(name: String): String =
+        selectedConversationId?.let { id -> CharacterSessionRegistry.get(id).vars[name] }.orEmpty()
+
+    /** 卡内脚本交互（受限通道）：写入当前角色会话的宏变量。 */
+    fun characterVariableSet(name: String, value: String) {
+        val id = selectedConversationId ?: return
+        val session = CharacterSessionRegistry.get(id)
+        if (session.vars[name] != value) {
+            session.vars[name] = value
+        }
     }
 
     fun deleteConversation(conversationId: String) {

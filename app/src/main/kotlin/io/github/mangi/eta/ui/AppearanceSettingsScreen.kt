@@ -228,6 +228,22 @@ internal fun AppearanceSettingsScreen(onBack: () -> Unit) {
                         update { current -> current.copy(predictiveBackEnabled = enabled) }
                     },
                 )
+                SwitchPreference(
+                    title = "渲染角色卡 HTML 界面",
+                    summary = "将卡片内嵌的 HTML 面板（状态栏、属性条等）按界面渲染；关闭后显示原文",
+                    checked = appearance.characterHtmlEnabled,
+                    onCheckedChange = { enabled ->
+                        update { current -> current.copy(characterHtmlEnabled = enabled) }
+                    },
+                )
+                SwitchPreference(
+                    title = "允许卡内脚本交互",
+                    summary = "允许卡片脚本通过受限通道发送消息、读写会话变量；来自不可信卡片时请保持关闭",
+                    checked = appearance.characterHtmlScriptsEnabled,
+                    onCheckedChange = { enabled ->
+                        update { current -> current.copy(characterHtmlScriptsEnabled = enabled) }
+                    },
+                )
                 ArrowPreference(
                     title = stringResource(R.string.appearance_interface_scale),
                     summary = stringResource(R.string.appearance_interface_scale_summary),

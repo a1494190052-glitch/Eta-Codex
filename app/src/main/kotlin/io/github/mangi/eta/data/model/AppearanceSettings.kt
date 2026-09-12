@@ -17,6 +17,10 @@ data class AppearanceSettings(
     val topBarBlurStyle: AppearanceTopBarBlurStyle = AppearanceTopBarBlurStyle.GAUSSIAN,
     val swipeDismissEnabled: Boolean = true,
     val predictiveBackEnabled: Boolean = true,
+    /** 角色卡内嵌 HTML 界面（状态栏/面板）渲染；关闭后按原文显示。 */
+    val characterHtmlEnabled: Boolean = true,
+    /** 允许卡内脚本通过受限通道交互（发消息/变量）；默认关闭。 */
+    val characterHtmlScriptsEnabled: Boolean = false,
     val interfaceScale: Float = DEFAULT_INTERFACE_SCALE,
 ) {
     fun normalized(): AppearanceSettings = copy(

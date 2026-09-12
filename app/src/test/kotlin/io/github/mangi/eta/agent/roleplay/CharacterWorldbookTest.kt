@@ -44,7 +44,7 @@ class CharacterWorldbookTest {
     }
 
     @Test
-    fun ordinaryWordsRemainLiteralEvenWithRegexFlagAndAliasesAreRead() {
+    fun regexKeysMatchWhilePlainKeysStayLiteral() {
         val card = card(""""entries":[
           {"keys":["A.B"],"use_regex":true,"content":"字面词","enabled":true,"extensions":{"position":0,"case_sensitive":true}},
           {"keys":["/hello/i"],"content":"表达式","enabled":true},
@@ -52,25 +52,43 @@ class CharacterWorldbookTest {
         ]""")
         val result = CharacterWorldbook.resolve(card, listOf("A.B HELLO"), 100) { it.length }
         assertEquals("字面词", result.beforeCharacter)
-        assertEquals("", result.afterCharacter)
-        assertEquals(listOf(1, 2), CharacterWorldbook.unsupportedEntries(card).map { it.index })
+        assertEquals("表达式", result.afterCharacter)
         assertTrue(CharacterWorldbook.resolve(card, listOf("a.b"), 100) { it.length }.beforeCharacter.isEmpty())
+        assertTrue(CharacterWorldbook.unsupportedEntries(card).isEmpty())
+    }
+
+    @Test
+    fun advancedConditionsFireWithTheirDocumentedSemantics() {
+        val card = card(""""entries":[
+          {"constant":true,"content":"深度","enabled":true,"extensions":{"position":4,"depth":1}},
+          {"constant":true,"content":"逻辑","enabled":true,"extensions":{"selectiveLogic":2}},
+          {"constant":true,"content":"不触","enabled":true,"extensions":{"useProbability":true,"probability":0}},
+          {"constant":true,"content":"分组","enabled":true,"extensions":{"group":"g1"}},
+          {"constant":true,"content":"冷却","enabled":true,"extensions":{"cooldown":2}}
+        ]""")
+        val result = CharacterWorldbook.resolve(card, listOf("a".repeat(64) + "!"), 1000) { it.length }
+        assertEquals("逻辑\n\n分组\n\n冷却", result.afterCharacter)
+        assertEquals(1, result.depthInjections.size)
+        assertEquals("深度", result.depthInjections.single().content)
+        assertEquals(1, result.depthInjections.single().depth)
+        assertTrue(CharacterWorldbook.unsupportedEntries(card).isEmpty())
     }
 
     @Test
     fun unsupportedConditionsPreventEvenConstantEntriesFromFiring() {
         val card = card(""""entries":[
-          {"constant":true,"content":"特殊位置","enabled":true,"extensions":{"position":4}},
-          {"constant":true,"content":"条件逻辑","enabled":true,"extensions":{"selectiveLogic":2}},
-          {"constant":true,"content":"概率","enabled":true,"extensions":{"useProbability":true,"probability":30}},
-          {"constant":true,"content":"分组","enabled":true,"extensions":{"group":"some-group"}},
-          {"constant":true,"content":"冷却","enabled":true,"extensions":{"cooldown":2}},
-          {"constant":true,"keys":["/(a+)+$/"],"content":"表达式","enabled":true},
-          {"constant":true,"content":"正文","enabled":true,"extensions":{"position":1,"selectiveLogic":0,"probability":100,"group":"","cooldown":null}}
+          {"constant":true,"content":"@@demo 正文","enabled":true,"extensions":{}},
+          {"constant":true,"content":"向量","enabled":true,"extensions":{"vectorized":true}},
+          {"constant":true,"content":"自动化","enabled":true,"extensions":{"automation_id":"auto-1"}},
+          {"constant":true,"content":"正文","enabled":true}
         ]""")
-        val result = CharacterWorldbook.resolve(card, listOf("a".repeat(10_000) + "!"), 1000) { it.length }
-        assertEquals("正文", result.afterCharacter)
-        assertEquals(6, CharacterWorldbook.unsupportedEntries(card).size)
+        val result = CharacterWorldbook.resolve(card, listOf("无关"), 1000) { it.length }
+        // 装饰器（@@）、向量检索与脚本自动化仍不支持，不参与匹配；普通条目正常注入。
+        assertFalse(result.afterCharacter.contains("@@"))
+        assertFalse(result.afterCharacter.contains("向量"))
+        assertFalse(result.afterCharacter.contains("自动化"))
+        assertTrue(result.afterCharacter.contains("正文"))
+        assertEquals(3, CharacterWorldbook.unsupportedEntries(card).size)
     }
 
     private fun card(book: String) = CharacterCardCodec.decodeJson(

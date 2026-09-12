@@ -51,10 +51,13 @@ class CharacterCardCodecTest {
     }
 
     @Test
-    fun macrosExpandKnownFieldsWithoutExecutingUnknownVariables() {
+    fun macrosExpandKnownFieldsAndExecuteVarMacrosWhileUnknownMacrosStayRaw() {
         val card = CharacterCardCodec.create("林").withEdits(description = "{{char}}住在山间。")
-        val result = CharacterMacros.expand("{{description}} <USER> {{original}} {{setvar::x::1}}", card, "小安", original = "原指令")
-        assertEquals("林住在山间。 小安 原指令 {{setvar::x::1}}", result)
+        // {{setvar}} 属于已支持的变量宏；无会话上下文时展开为空串。
+        val result = CharacterMacros.expand(
+            "{{description}} <USER> {{original}} {{setvar::x::1}}{{unknown_macro_x}}", card, "小安", original = "原指令",
+        )
+        assertEquals("林住在山间。 小安 原指令 {{unknown_macro_x}}", result)
         assertEquals("{{description}}", CharacterMacros.expand("{{description}}", card.withEdits(description = "{{description}}")))
         assertFalse(CharacterMacros.expand("{{//注释}}你好", card).contains("注释"))
     }
@@ -82,15 +85,15 @@ class CharacterCardCodecTest {
     @Test
     fun compatibilityWarningsShareMacroAndWorldbookSupportWithoutEchoingCardText() {
         val card = CharacterCardCodec.decodeJson("""{"name":"角色",
-          "description":"{{setvar::private_key::private_value}} <script>private_script()</script>",
-          "extensions":{"regex_scripts":[{"x":"private_regex"}],"scripts":["private_script"],
+          "description":"{{private_macro_x}} <script>private_script()</script>",
+          "extensions":{"regex_scripts":[{"scriptName":"private_regex","findRegex":"/x/","replaceString":"y","placement":3}],"scripts":["private_script"],
             "depth_prompt":{"prompt":"备注","depth":"invalid"}},
-          "character_book":{"entries":[{"enabled":true,"constant":true,"content":"正文","extensions":{"group":"private_group"}}]}
+          "character_book":{"entries":[{"enabled":true,"constant":true,"content":"正文","extensions":{"vectorized":true}}]}
         }""")
         val warnings = CharacterCardCompatibility.warnings(card)
         assertTrue(warnings.any { it.contains("未支持的宏") })
         assertTrue(warnings.any { it.contains("HTML") })
-        assertTrue(warnings.any { it.contains("正则替换") })
+        assertTrue(warnings.any { it.contains("快捷命令") })
         assertTrue(warnings.any { it.contains("1 条世界书") })
         assertTrue(warnings.any { it.contains("深度备注") })
         assertFalse(warnings.any { it.contains("private_") })
@@ -100,13 +103,14 @@ class CharacterCardCodecTest {
     }
 
     @Test
-    fun unrelatedWorldbookEditPreservesUnsupportedPosition() {
+    fun unrelatedWorldbookEditPreservesDepthInjectionPosition() {
         val card = CharacterCardCodec.decodeJson("""{"name":"角色","character_book":{"entries":[
           {"enabled":true,"constant":true,"content":"正文","position":"at_depth","extensions":{"position":4,"depth":2}}
         ]}}""")
         val updated = card.withWorldbook(card.worldbookDraft().copy(name = "新书名"))
         assertEquals("at_depth", updated.worldbookDraft().entries.single().position)
-        assertEquals(1, CharacterWorldbook.unsupportedEntries(updated).size)
+        // 深度注入属于已支持能力，不再计入"未支持的条目"。
+        assertEquals(0, CharacterWorldbook.unsupportedEntries(updated).size)
     }
 
     @Test

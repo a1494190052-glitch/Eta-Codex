@@ -151,7 +151,9 @@ internal class AgentLoop(
             val providerResponse = completedRound.response
 
             runController.throwIfCancelled()
-            val assistantMessage = providerResponse.assistantMessage
+            val rawAssistant = providerResponse.assistantMessage
+            // 角色会话：AI 输出先应用正则脚本（placement=2），显示、历史与后续请求保持一致。
+            val assistantMessage = roleplayContext?.processAssistantMessage(rawAssistant) ?: rawAssistant
             val toolCalls = AgentConversationCodec.parseToolCalls(assistantMessage)
             if (!purpose.allowsTools && toolCalls.isNotEmpty()) {
                 throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")

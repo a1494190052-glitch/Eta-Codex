@@ -25,8 +25,10 @@ internal object CharacterCardCompatibility {
         }
         val extensionKeys = mutableSetOf<String>()
         collectExtensionKeys(card.extensions, extensionKeys, 0)
-        if (extensionKeys.any { it.contains("regex") }) add("含正则替换扩展，数据会保留，替换规则不执行。")
-        if (extensionKeys.any { it.contains("script") }) add("含脚本扩展，数据会保留，脚本不执行。")
+        addAll(CharacterRegexScripts.warnings(card))
+        if (extensionKeys.any { it.contains("script") && !it.contains("regex") }) {
+            add("含脚本扩展，数据会保留，脚本不执行。")
+        }
         card.extensions["depth_prompt"]?.takeUnless { it == JsonNull }?.let { value ->
             if (value !is JsonObject || value.text("prompt").isNotBlank() && card.depthPrompt == null) {
                 add("角色深度备注的参数未受支持，已跳过该备注。")

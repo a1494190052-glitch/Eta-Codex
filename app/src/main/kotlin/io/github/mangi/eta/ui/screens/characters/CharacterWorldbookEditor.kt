@@ -11,12 +11,14 @@ import io.github.mangi.eta.agent.roleplay.CharacterBookEntryDraft
 import io.github.mangi.eta.agent.roleplay.CharacterWorldbook
 import io.github.mangi.eta.ui.app.CharacterLibraryStore
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.preference.WindowSpinnerPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 internal fun LazyListScope.characterWorldbookEditor(
@@ -158,15 +160,90 @@ private fun CharacterWorldbookEntryEditor(
         enabled = enabled,
         onCheckedChange = { onChange(entry.copy(constant = it)) },
     )
-    SwitchPreference(
-        title = "放在角色设定之前",
-        summary = "关闭时放在角色设定之后",
-        checked = entry.position == "before_char",
-        enabled = enabled,
-        onCheckedChange = { onChange(entry.copy(position = if (it) "before_char" else "after_char")) },
+    val positionNames = listOf(
+        "before_char", "after_char", "before_examples", "after_examples", "at_depth",
     )
+    val positionLabels = listOf(
+        "角色设定之前", "角色设定之后", "对话示例之前", "对话示例之后", "按深度注入对话",
+    )
+    WindowSpinnerPreference(
+        items = positionLabels.map { DropdownItem(text = it) },
+        selectedIndex = positionNames.indexOf(entry.position).coerceAtLeast(0),
+        title = "插入位置",
+        summary = when (entry.position) {
+            "at_depth" -> "注入到最近对话中，距末尾 ${entry.depth ?: 4} 条消息"
+            "before_examples" -> "放在对话示例之前"
+            "after_examples" -> "放在对话示例之后"
+            "before_char" -> "放在角色设定之前"
+            else -> "放在角色设定之后"
+        },
+        enabled = enabled,
+        onSelectedIndexChange = { index ->
+            onChange(entry.copy(position = positionNames.getOrElse(index) { "after_char" }))
+        },
+    )
+    if (entry.position == "at_depth") {
+        CharacterTextField("注入深度（距最近对话末尾的消息数）", (entry.depth ?: 4).toString(), { value ->
+            value.toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(depth = it)) }
+        }, enabled, singleLine = true)
+        val roleNames = listOf("system", "user", "assistant")
+        val roleLabels = listOf("系统提示", "以用户消息", "以角色消息")
+        WindowSpinnerPreference(
+            items = roleLabels.map { DropdownItem(text = it) },
+            selectedIndex = roleNames.indexOf(entry.role).coerceAtLeast(0),
+            title = "注入角色",
+            summary = "决定该条目以哪种消息身份进入上下文",
+            enabled = enabled,
+            onSelectedIndexChange = { index ->
+                onChange(entry.copy(role = roleNames.getOrElse(index) { "system" }))
+            },
+        )
+    }
     CharacterTextField("插入顺序", entry.insertionOrder.toString(), { value ->
         value.toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(insertionOrder = it)) }
+    }, enabled, singleLine = true)
+    CharacterTextField("优先级（越大越先保留，留空默认 0）", entry.priority?.toString().orEmpty(), { value ->
+        value.trim().toIntOrNull()?.let { onChange(entry.copy(priority = it)) }
+    }, enabled, singleLine = true)
+    CharacterFieldGroupLabel("高级触发（来自酒馆/Tavo 卡）")
+    CharacterTextField("触发概率 0-100（留空为 100）", entry.probability?.toString().orEmpty(), { value ->
+        value.trim().toIntOrNull()?.takeIf { it in 0..100 }?.let { onChange(entry.copy(probability = it)) }
+    }, enabled, singleLine = true)
+    SwitchPreference(
+        title = "全词匹配",
+        summary = "关键词只在完整词语时命中",
+        checked = entry.matchWholeWords,
+        enabled = enabled,
+        onCheckedChange = { onChange(entry.copy(matchWholeWords = it)) },
+    )
+    SwitchPreference(
+        title = "忽略预算",
+        summary = "始终注入，不占用世界书 Token 预算",
+        checked = entry.ignoreBudget,
+        enabled = enabled,
+        onCheckedChange = { onChange(entry.copy(ignoreBudget = it)) },
+    )
+    CharacterTextField("分组（同组只保留一条，留空不分组）", entry.group, { onChange(entry.copy(group = it)) }, enabled, singleLine = true)
+    if (entry.group.isNotBlank()) {
+        CharacterTextField("组内权重（同优先级随机时使用）", entry.groupWeight?.toString().orEmpty(), { value ->
+            value.trim().toDoubleOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(groupWeight = it)) }
+        }, enabled, singleLine = true)
+        SwitchPreference(
+            title = "覆盖同组条目",
+            summary = "触发时替代同组其他条目",
+            checked = entry.groupOverride,
+            enabled = enabled,
+            onCheckedChange = { onChange(entry.copy(groupOverride = it)) },
+        )
+    }
+    CharacterTextField("保持回合数 sticky（留空不启用）", entry.sticky?.toString().orEmpty(), { value ->
+        value.trim().toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(sticky = it)) }
+    }, enabled, singleLine = true)
+    CharacterTextField("冷却回合数 cooldown（留空不启用）", entry.cooldown?.toString().orEmpty(), { value ->
+        value.trim().toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(cooldown = it)) }
+    }, enabled, singleLine = true)
+    CharacterTextField("延迟回合数 delay（留空不启用）", entry.delay?.toString().orEmpty(), { value ->
+        value.trim().toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(entry.copy(delay = it)) }
     }, enabled, singleLine = true)
     TextButton(
         text = "移除条目",
